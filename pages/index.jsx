@@ -84,15 +84,25 @@ export default function Dashboard() {
   }, [])
 
   // Fetch royalties
-  const fetchData = useCallback(async () => {
-    setLoading(true)
+const fetchData = useCallback(async () => {
+  setLoading(true)
+  let allData = []
+  let from = 0
+  const PAGE = 1000
+  while (true) {
     const { data, error } = await supabase
       .from('royalties')
       .select('month, artist, title, store, usd')
       .order('month', { ascending: true })
-    if (!error) setRows(data || [])
-    setLoading(false)
-  }, [])
+      .range(from, from + PAGE - 1)
+    if (error || !data || data.length === 0) break
+    allData = allData.concat(data)
+    if (data.length < PAGE) break
+    from += PAGE
+  }
+  setRows(allData)
+  setLoading(false)
+}, [])
 
   useEffect(() => { if (user) fetchData() }, [user])
 
