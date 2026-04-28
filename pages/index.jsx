@@ -93,11 +93,103 @@ export default function Home() {
           <p className="page-sub">Royalties & streams par artiste</p>
         </div>
 
+        {!loading && (() => {
+          const allStats = Object.values(artistStats)
+          const totalUsd = allStats.reduce((s,a) => s+(a.totalUsd||0), 0)
+          const totalQty = allStats.reduce((s,a) => s+(a.totalQty||0), 0)
+          const lastUsd  = allStats.reduce((s,a) => s+(a.lastUsd||0), 0)
+          const prevUsd  = allStats.reduce((s,a) => s+(a.prevUsd||0), 0)
+          const lastQty  = allStats.reduce((s,a) => s+(a.lastQty||0), 0)
+          const prevQty  = allStats.reduce((s,a) => s+(a.prevQty||0), 0)
+          const dUsd = deltaStr(lastUsd, prevUsd)
+          const dQty = deltaStr(lastQty, prevQty)
+          const lastMonth = allStats[0]?.lastMonth || '—'
+          return (
+            <div className="label-card">
+              <div className="lc-top">
+                <div className="lc-logo">A</div>
+                <div className="lc-name">Avlanche Music</div>
+                <div className="lc-month">{lastMonth}</div>
+              </div>
+              <div className="lc-stats">
+                <div className="lc-stat">
+                  <div className="lc-stat-label">Royalties ce mois</div>
+                  <div className="lc-stat-val">{fmt(lastUsd)}</div>
+                  {dUsd && <div className={`lc-delta ${dUsd.positive?'pos':'neg'}`}>{dUsd.str}</div>}
+                </div>
+                <div className="lc-stat">
+                  <div className="lc-stat-label">Streams ce mois</div>
+                  <div className="lc-stat-val">{fmtStreams(lastQty)}</div>
+                  {dQty && <div className={`lc-delta ${dQty.positive?'pos':'neg'}`}>{dQty.str}</div>}
+                </div>
+                <div className="lc-stat">
+                  <div className="lc-stat-label">Total royalties</div>
+                  <div className="lc-stat-val">{fmt(totalUsd)}</div>
+                </div>
+                <div className="lc-stat">
+                  <div className="lc-stat-label">Total streams</div>
+                  <div className="lc-stat-val">{fmtStreams(totalQty)}</div>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
         {loading ? (
           <div className="loading-grid">
+            <div className="artist-card skeleton full-width" />
             {ARTISTS.map(a => <div key={a} className="artist-card skeleton" />)}
           </div>
         ) : (
+          <>
+          {/* LABEL CARD */}
+          {(() => {
+            const total = Object.values(artistStats).reduce((s,v) => s + (v.totalUsd||0), 0)
+            const totalQty = Object.values(artistStats).reduce((s,v) => s + (v.totalQty||0), 0)
+            const lastUsd = Object.values(artistStats).reduce((s,v) => s + (v.lastUsd||0), 0)
+            const prevUsd = Object.values(artistStats).reduce((s,v) => s + (v.prevUsd||0), 0)
+            const lastQty = Object.values(artistStats).reduce((s,v) => s + (v.lastQty||0), 0)
+            const prevQty = Object.values(artistStats).reduce((s,v) => s + (v.prevQty||0), 0)
+            const dUsd = deltaStr(lastUsd, prevUsd)
+            const dQty = deltaStr(lastQty, prevQty)
+            return (
+              <div className="artist-card label-card" onClick={() => router.push('/label')}>
+                <div className="ac-top">
+                  <div className="ac-dot" style={{ background: 'linear-gradient(135deg, #3b82f6, #f97316, #eab308, #a78bfa)' }} />
+                  <div className="ac-name">Avlanche Music</div>
+                  {lastUpdated && <div className="ac-month">{lastUpdated}</div>}
+                </div>
+                <div className="ac-stats label-stats">
+                  <div className="ac-stat">
+                    <div className="ac-stat-label">Royalties ce mois</div>
+                    <div className="ac-stat-val" style={{ color: '#fff' }}>{fmt(lastUsd)}</div>
+                    {dUsd && <div className={`ac-delta ${dUsd.positive ? 'pos' : 'neg'}`}>{dUsd.str}</div>}
+                  </div>
+                  <div className="ac-stat">
+                    <div className="ac-stat-label">Streams ce mois</div>
+                    <div className="ac-stat-val">{fmtStreams(lastQty)}</div>
+                    {dQty && <div className={`ac-delta ${dQty.positive ? 'pos' : 'neg'}`}>{dQty.str}</div>}
+                  </div>
+                  <div className="ac-stat">
+                    <div className="ac-stat-label">Total royalties</div>
+                    <div className="ac-stat-val" style={{ color: '#fff' }}>{fmt(total)}</div>
+                  </div>
+                  <div className="ac-stat">
+                    <div className="ac-stat-label">Total streams</div>
+                    <div className="ac-stat-val">{fmtStreams(totalQty)}</div>
+                  </div>
+                </div>
+                <div className="ac-footer">
+                  <div className="label-artists-dots">
+                    {ARTISTS.map(a => <span key={a} className="mini-dot" style={{ background: COLORS[a] }} />)}
+                  </div>
+                  <span className="ac-arrow">→</span>
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* ARTIST GRID */}
           <div className="artist-grid">
             {ARTISTS.map(artist => {
               const s = artistStats[artist] || {}
@@ -162,6 +254,7 @@ export default function Home() {
               )
             })}
           </div>
+          </>
         )}
       </div>
 
@@ -175,10 +268,34 @@ export default function Home() {
       )}
 
       <style jsx>{`
-        .page-header { margin-bottom: 28px; }
+        .page-header { margin-bottom: 20px; }
         h1 { font-size: 24px; font-weight: 700; color: #eee; margin-bottom: 4px; }
         .page-sub { font-size: 13px; color: #444; }
-        .artist-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+
+        .label-card {
+          background: #141414;
+          border: 1px solid #2a2a2a;
+          border-radius: 10px;
+          padding: 20px;
+          margin-bottom: 16px;
+        }
+        .lc-top { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+        .lc-logo {
+          width: 28px; height: 28px; border-radius: 6px;
+          background: #f97316; color: #fff;
+          font-size: 14px; font-weight: 800;
+          display: flex; align-items: center; justify-content: center;
+          flex-shrink: 0;
+        }
+        .lc-name { font-size: 16px; font-weight: 700; color: #eee; flex: 1; }
+        .lc-month { font-size: 11px; color: #333; }
+        .lc-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+        @media(max-width: 600px) { .lc-stats { grid-template-columns: repeat(2, 1fr); } }
+        .lc-stat-label { font-size: 10px; color: #444; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+        .lc-stat-val { font-size: 22px; font-weight: 700; color: #eee; line-height: 1; margin-bottom: 3px; }
+        .lc-delta { font-size: 12px; font-weight: 600; }
+
+        .artist-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
         @media(max-width: 600px) { .artist-grid { grid-template-columns: 1fr; } }
         .loading-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
         .skeleton { height: 200px; background: #141414; border-radius: 10px; animation: pulse 1.5s ease infinite; }
@@ -211,6 +328,11 @@ export default function Home() {
         .btn-import-small:hover { opacity: .7; }
         .ac-arrow { margin-left: auto; color: #333; font-size: 14px; }
         .nav-meta { font-size: 11px; color: #444; }
+        .full-width { grid-column: 1 / -1; }
+        .label-stats { grid-template-columns: repeat(4, 1fr) !important; }
+        @media(max-width: 600px) { .label-stats { grid-template-columns: repeat(2, 1fr) !important; } }
+        .label-artists-dots { display: flex; gap: 5px; align-items: center; }
+        .mini-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
       `}</style>
     </div>
   )
