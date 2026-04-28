@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { parseDistroKid, parseWarner } from '../lib/csvParser'
+import { parseDistroKid, parseWarner, parseTuneCore } from '../lib/csvParser'
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
@@ -12,7 +12,8 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
   const inputRef = useRef()
 
   const isWarner = source === 'warner'
-  const label = isWarner ? 'Warner' : 'DistroKid'
+  const isTuneCore = source === 'tunecore'
+  const label = isWarner ? 'Warner' : isTuneCore ? 'TuneCore' : 'DistroKid'
 
   async function handleFile(file) {
     if (!file) return
@@ -21,7 +22,7 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
 
     try {
       const text = await file.text()
-      const { rows, months } = isWarner ? parseWarner(text) : parseDistroKid(text)
+      const { rows, months } = isWarner ? parseWarner(text) : isTuneCore ? parseTuneCore(text) : parseDistroKid(text)
 
       if (!rows.length) {
         setStatus('error')
@@ -107,7 +108,8 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
             <div className="drop-icon">📄</div>
             <div className="drop-text"><strong>Glisse le CSV {label} ici</strong><br />ou clique pour choisir</div>
             {isWarner && <div className="drop-hint">Colonnes : Month, Artist, Title, Store, Country, ISRC, Revenue (USD), Streams</div>}
-            {!isWarner && <div className="drop-hint">DistroKid → Reporting → Royalties CSV</div>}
+            {isTuneCore && <div className="drop-hint">TuneCore → Revenus & Statistiques → Télécharger rapports de vente mensuels</div>}
+            {!isWarner && !isTuneCore && <div className="drop-hint">DistroKid → Reporting → Royalties CSV</div>}
           </div>
         )}
 
