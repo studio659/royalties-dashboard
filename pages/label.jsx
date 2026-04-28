@@ -6,6 +6,7 @@ import {
 } from 'recharts'
 import { supabase } from '../lib/supabase'
 import { ARTISTS, COLORS, PLAT_COLORS, fmt, fmtStreams, deltaStr } from '../lib/artists'
+import MainNav from '../components/MainNav'
 
 function KPI({ label, value, sub, subClass }) {
   return (
@@ -168,14 +169,7 @@ export default function LabelPage() {
 
   return (
     <div className="app">
-      <nav className="navbar">
-        <button className="back-btn" onClick={() => router.push('/')}>← Retour</button>
-        <div className="nav-brand">
-          <span className="nav-dot" style={{ background: 'linear-gradient(135deg, #3b82f6, #f97316)' }} />
-          <span>Avlanche Music</span>
-        </div>
-        <div style={{ width: 80 }} />
-      </nav>
+      <MainNav title="Avlanche Music" showBack onBack={() => router.push('/')} />
 
       <div className="page">
 
