@@ -3,6 +3,7 @@ import { useRouter } from 'next/router'
 import { supabase } from '../lib/supabase'
 import { ARTISTS, COLORS, ARTIST_SOURCES, fmt, fmtStreams, deltaStr } from '../lib/artists'
 import ImportModal from '../components/ImportModal'
+import MainNav from '../components/MainNav'
 
 export default function Home() {
   const router = useRouter()
@@ -69,23 +70,9 @@ export default function Home() {
     setLoading(false)
   }
 
-  async function handleLogout() {
-    await supabase.auth.signOut()
-    router.replace('/login')
-  }
-
   return (
     <div className="app">
-      <nav className="navbar">
-        <div className="nav-brand">
-          <span className="nav-dot" />
-          <span>Avlanche Music</span>
-        </div>
-        <div className="nav-right">
-          {lastUpdated && <span className="nav-meta">Dernière donnée : {lastUpdated}</span>}
-          <button className="btn-logout" onClick={handleLogout} title="Déconnexion">⎋</button>
-        </div>
-      </nav>
+      <MainNav />
 
       <div className="page">
         <div className="page-header">
