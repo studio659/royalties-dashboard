@@ -93,48 +93,6 @@ export default function Home() {
           <p className="page-sub">Royalties & streams par artiste</p>
         </div>
 
-        {!loading && (() => {
-          const allStats = Object.values(artistStats)
-          const totalUsd = allStats.reduce((s,a) => s+(a.totalUsd||0), 0)
-          const totalQty = allStats.reduce((s,a) => s+(a.totalQty||0), 0)
-          const lastUsd  = allStats.reduce((s,a) => s+(a.lastUsd||0), 0)
-          const prevUsd  = allStats.reduce((s,a) => s+(a.prevUsd||0), 0)
-          const lastQty  = allStats.reduce((s,a) => s+(a.lastQty||0), 0)
-          const prevQty  = allStats.reduce((s,a) => s+(a.prevQty||0), 0)
-          const dUsd = deltaStr(lastUsd, prevUsd)
-          const dQty = deltaStr(lastQty, prevQty)
-          const lastMonth = allStats[0]?.lastMonth || '—'
-          return (
-            <div className="label-card">
-              <div className="lc-top">
-                <div className="lc-logo">A</div>
-                <div className="lc-name">Avlanche Music</div>
-                <div className="lc-month">{lastMonth}</div>
-              </div>
-              <div className="lc-stats">
-                <div className="lc-stat">
-                  <div className="lc-stat-label">Royalties ce mois</div>
-                  <div className="lc-stat-val">{fmt(lastUsd)}</div>
-                  {dUsd && <div className={`lc-delta ${dUsd.positive?'pos':'neg'}`}>{dUsd.str}</div>}
-                </div>
-                <div className="lc-stat">
-                  <div className="lc-stat-label">Streams ce mois</div>
-                  <div className="lc-stat-val">{fmtStreams(lastQty)}</div>
-                  {dQty && <div className={`lc-delta ${dQty.positive?'pos':'neg'}`}>{dQty.str}</div>}
-                </div>
-                <div className="lc-stat">
-                  <div className="lc-stat-label">Total royalties</div>
-                  <div className="lc-stat-val">{fmt(totalUsd)}</div>
-                </div>
-                <div className="lc-stat">
-                  <div className="lc-stat-label">Total streams</div>
-                  <div className="lc-stat-val">{fmtStreams(totalQty)}</div>
-                </div>
-              </div>
-            </div>
-          )
-        })()}
-
         {loading ? (
           <div className="loading-grid">
             <div className="artist-card skeleton full-width" />
