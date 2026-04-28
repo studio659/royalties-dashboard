@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
 import { supabase } from '../lib/supabase'
-import { ARTISTS, COLORS, fmt, fmtStreams, deltaStr } from '../lib/artists'
+import { ARTISTS, COLORS, ARTIST_SOURCES, fmt, fmtStreams, deltaStr } from '../lib/artists'
 import ImportModal from '../components/ImportModal'
 
 export default function Home() {
@@ -146,22 +146,16 @@ export default function Home() {
                   )}
 
                   <div className="ac-footer">
-                    <button
-                      className="btn-import-small"
-                      style={{ borderColor: color + '44', color }}
-                      onClick={e => { e.stopPropagation(); setImportTarget({ artist, source: 'distrokid' }) }}
-                    >
-                      ↑ DistroKid
-                    </button>
-                    {artist === 'Sherfflazone' && (
+                    {(ARTIST_SOURCES[artist] || ['distrokid']).map(source => (
                       <button
+                        key={source}
                         className="btn-import-small"
                         style={{ borderColor: color + '44', color }}
-                        onClick={e => { e.stopPropagation(); setImportTarget({ artist, source: 'warner' }) }}
+                        onClick={e => { e.stopPropagation(); setImportTarget({ artist, source }) }}
                       >
-                        ↑ Warner
+                        ↑ {source === 'distrokid' ? 'DistroKid' : source === 'tunecore' ? 'TuneCore' : 'Warner'}
                       </button>
-                    )}
+                    ))}
                     <span className="ac-arrow">→</span>
                   </div>
                 </div>
