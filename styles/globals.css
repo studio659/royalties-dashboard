@@ -53,3 +53,20 @@ body {
 
 /* recharts */
 .recharts-tooltip-wrapper { outline: none; }
+
+/* â”€â”€ MOBILE RESPONSIVE â”€â”€ */
+@media (max-width: 600px) {
+  .page { padding: 16px 12px !important; }
+  .kpi-row, .kpi-grid { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+  .two-col { grid-template-columns: 1fr !important; }
+  .artist-grid { grid-template-columns: 1fr !important; }
+  .pc-stats { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+  .pc-stats > div:last-child { grid-column: 1 / -1; }
+  .sub-tabs { gap: 4px; overflow-x: auto; flex-wrap: nowrap; }
+  .sub-tab { flex-shrink: 0; padding: 5px 12px; font-size: 11px; }
+  .tracker-card { padding: 14px; }
+  .tc-pct { font-size: 36px !important; }
+  .tc-gen { font-size: 15px !important; }
+  .si-progress { width: 120px !important; }
+  .pr-name { width: 110px !important; font-size: 11px !important; }
+}
