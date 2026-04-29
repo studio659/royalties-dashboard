@@ -25,12 +25,21 @@ export default function RecoupeIndex() {
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
-    const [{ data: s }, { data: r }] = await Promise.all([
-      supabase.from('series').select('*, singles(*, budget_lines(*))').order('created_at'),
-      supabase.from('royalties').select('title, artist, usd, qty, month'),
-    ])
+    const { data: s } = await supabase.from('series').select('*, singles(*, budget_lines(*))').order('created_at')
+
+    // Paginate royalties (18K+ rows)
+    let allRoy = [], from = 0
+    while (true) {
+      const { data, error } = await supabase
+        .from('royalties').select('title, artist, usd, qty, month')
+        .range(from, from + 999)
+      if (error || !data || data.length === 0) break
+      allRoy = allRoy.concat(data)
+      if (data.length < 1000) break
+      from += 1000
+    }
     setSeries(s || [])
-    setRoyalties(r || [])
+    setRoyalties(allRoy)
     setLoading(false)
   }, [])
 
