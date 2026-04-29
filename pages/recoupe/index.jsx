@@ -61,7 +61,7 @@ Cette action supprimera aussi tous les singles et budgets associés.`)) return
       totalBudgetEur += s.budget_eur || 0
       const rows = royalties.filter(r =>
         r.artist === s.artist &&
-        r.title.toLowerCase().includes(s.title.toLowerCase().substring(0, 10))
+        r.title.toLowerCase() === s.title.toLowerCase()
       )
       totalUsd += rows.reduce((sum, r) => sum + r.usd, 0)
       totalQty += rows.reduce((sum, r) => sum + r.qty, 0)
