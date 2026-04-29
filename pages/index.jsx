@@ -63,15 +63,18 @@ export default function Home() {
 
     const stats = {}
     const resolved = artistData || dynamicArtists
-    const artistList = (resolved || []).map(a => a.name).filter(n => n !== 'NoSnow')
+    const artistList = (resolved || []).map(a => a.name)
     for (const artist of artistList.length ? artistList : ARTISTS) {
       const ar = data.filter(r => r.artist === artist)
       const months = [...new Set(ar.map(r => r.month))].sort().reverse()
       const lastM = months[0], prevM = months[1]
-      const currency = ar[0]?.currency || 'USD'
-
-      // Montant natif (pour la carte artiste)
-      const native = (r) => currency === 'EUR' ? Number(r.amount_eur||0) : Number(r.amount_usd||0)
+      const hasEur = ar.some(r => Number(r.amount_eur||0) !== 0)
+      const hasUsd = ar.some(r => Number(r.amount_usd||0) !== 0)
+      const isMixed = hasEur && hasUsd
+      const currency = isMixed ? 'EUR' : (ar[0]?.currency || 'USD')
+      const native = (r) => isMixed
+        ? Number(r.amount_eur||0) + Number(r.amount_usd||0) * rate
+        : currency === 'EUR' ? Number(r.amount_eur||0) : Number(r.amount_usd||0)
       const lastAmount  = ar.filter(r=>r.month===lastM).reduce((s,r)=>s+native(r),0)
       const prevAmount  = ar.filter(r=>r.month===prevM).reduce((s,r)=>s+native(r),0)
       const totalAmount = ar.reduce((s,r)=>s+native(r),0)
@@ -120,12 +123,13 @@ export default function Home() {
 
           {/* CARTE LABEL en EUR */}
           {(() => {
-            const totalEur = Object.values(artistStats).reduce((s,v)=>s+(v.totalEur||0),0)
-            const totalQty = Object.values(artistStats).reduce((s,v)=>s+(v.totalQty||0),0)
-            const lastEur  = Object.values(artistStats).reduce((s,v)=>s+(v.lastEur||0),0)
-            const prevEur  = Object.values(artistStats).reduce((s,v)=>s+(v.prevEur||0),0)
-            const lastQty  = Object.values(artistStats).reduce((s,v)=>s+(v.lastQty||0),0)
-            const prevQty  = Object.values(artistStats).reduce((s,v)=>s+(v.prevQty||0),0)
+            const labelStats = Object.values(artistStats)
+            const totalEur = labelStats.reduce((s,v)=>s+(v.totalEur||0),0)
+            const totalQty = labelStats.reduce((s,v)=>s+(v.totalQty||0),0)
+            const lastEur  = labelStats.reduce((s,v)=>s+(v.lastEur||0),0)
+            const prevEur  = labelStats.reduce((s,v)=>s+(v.prevEur||0),0)
+            const lastQty  = labelStats.reduce((s,v)=>s+(v.lastQty||0),0)
+            const prevQty  = labelStats.reduce((s,v)=>s+(v.prevQty||0),0)
             const dEur = deltaStr(lastEur, prevEur)
             const dQty = deltaStr(lastQty, prevQty)
             return (
