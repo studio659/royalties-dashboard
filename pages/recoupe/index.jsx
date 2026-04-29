@@ -3,6 +3,7 @@ import { useRouter } from 'next/router'
 import { supabase } from '../../lib/supabase'
 import { ARTISTS, COLORS, fmt } from '../../lib/artists'
 import MainNav from '../../components/MainNav'
+import NewProjectModal from '../../components/NewProjectModal'
 
 const RATE_DEFAULT = 0.92
 
@@ -13,6 +14,7 @@ export default function RecoupeIndex() {
   const [royalties, setRoyalties] = useState([])
   const [rate, setRate] = useState(RATE_DEFAULT)
   const [loading, setLoading] = useState(true)
+  const [showModal, setShowModal] = useState(false)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -167,6 +169,14 @@ export default function RecoupeIndex() {
           </>
         )}
       </div>
+
+      {showModal && (
+        <NewProjectModal
+          defaultArtist={activeArtist}
+          onClose={() => setShowModal(false)}
+          onSuccess={fetchAll}
+        />
+      )}
 
       <style jsx>{`
         .sub-tabs-bar {
