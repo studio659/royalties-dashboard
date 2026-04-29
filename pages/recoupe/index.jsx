@@ -45,6 +45,15 @@ export default function RecoupeIndex() {
     setLoading(false)
   }, [])
 
+  async function deleteSerie(e, serieId, serieName) {
+    e.stopPropagation()
+    if (!confirm(`Supprimer "${serieName}" ?
+
+Cette action supprimera aussi tous les singles et budgets associés.`)) return
+    await supabase.from('series').delete().eq('id', serieId)
+    fetchAll()
+  }
+
   function getSeriesStats(serie) {
     const singles = serie.singles || []
     let totalBudgetEur = 0, totalUsd = 0, totalQty = 0
@@ -223,6 +232,9 @@ export default function RecoupeIndex() {
         .pcs-sub { font-size: 10px; color: #555; margin-top: 2px; }
         .pos { color: #6ee7b7 !important; }
         .warn { color: #f59e0b !important; }
+        .pc-footer { display: flex; justify-content: flex-end; padding-top: 12px; border-top: 1px solid #1a1a1a; margin-top: 4px; }
+        .del-btn { background: none; border: 1px solid #2a1010; color: #664; font-size: 11px; padding: 5px 12px; border-radius: 5px; cursor: pointer; font-family: inherit; transition: all .2s; }
+        .del-btn:hover { background: #1a0808; color: #f87171; border-color: #f8717144; }
         .new-project-btn {
           width: 100%; padding: 18px; background: none; border: 1.5px dashed #1e1e1e;
           border-radius: 12px; text-align: center; color: #333; font-size: 13px;
