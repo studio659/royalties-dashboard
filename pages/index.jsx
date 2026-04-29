@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { ARTISTS, COLORS, ARTIST_SOURCES, fmt, fmtStreams, deltaStr } from '../lib/artists'
 import ImportModal from '../components/ImportModal'
 import MainNav from '../components/MainNav'
+import AddArtistModal from '../components/AddArtistModal'
 
 export default function Home() {
   const router = useRouter()
@@ -11,6 +12,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [artistStats, setArtistStats] = useState({})
   const [importTarget, setImportTarget] = useState(null) // { artist, source }
+  const [dynamicArtists, setDynamicArtists] = useState(null) // null = not yet loaded
+  const [showAddArtist, setShowAddArtist] = useState(false)
   const [lastUpdated, setLastUpdated] = useState(null)
 
   useEffect(() => {
@@ -25,8 +28,13 @@ export default function Home() {
   }, [])
 
   useEffect(() => {
-    if (user) fetchStats()
+    if (user) { fetchArtists(); fetchStats() }
   }, [user])
+
+  async function fetchArtists() {
+    const { data } = await supabase.from('artists').select('name, color, sources').order('created_at')
+    if (data?.length) setDynamicArtists(data)
+  }
 
   async function fetchStats() {
     setLoading(true)
@@ -46,7 +54,8 @@ export default function Home() {
     if (!data.length) { setLoading(false); return }
 
     const stats = {}
-    for (const artist of ARTISTS) {
+    const artistList = (dynamicArtists || []).map(a => a.name).filter(n => n !== 'NoSnow') // exclude hors-label
+    for (const artist of artistList.length ? artistList : ARTISTS) {
       const ar = data.filter(r => r.artist === artist)
       const months = [...new Set(ar.map(r => r.month))].sort().reverse()
       const lastM = months[0], prevM = months[1]
@@ -143,9 +152,10 @@ export default function Home() {
 
           {/* ARTIST GRID */}
           <div className="artist-grid">
-            {ARTISTS.map(artist => {
+            {(dynamicArtists || ARTISTS.map(a => ({ name: a, color: COLORS[a], sources: ARTIST_SOURCES[a] || ['distrokid'] }))).map(artistObj => {
+              const artist = typeof artistObj === 'string' ? artistObj : artistObj.name
               const s = artistStats[artist] || {}
-              const color = COLORS[artist]
+              const color = typeof artistObj === 'string' ? COLORS[artist] : (artistObj.color || COLORS[artist] || '#888')
               return (
                 <div
                   key={artist}
@@ -190,7 +200,7 @@ export default function Home() {
                   )}
 
                   <div className="ac-footer">
-                    {(ARTIST_SOURCES[artist] || ['distrokid']).map(source => (
+                    {((typeof artistObj === 'object' ? artistObj.sources : ARTIST_SOURCES[artist]) || ['distrokid']).map(source => (
                       <button
                         key={source}
                         className="btn-import-small"
@@ -205,6 +215,13 @@ export default function Home() {
                 </div>
               )
             })}
+
+            {/* ADD ARTIST CARD */}
+            <div className="artist-card add-artist-card" onClick={() => setShowAddArtist(true)}>
+              <div className="add-icon">+</div>
+              <div className="add-label">Ajouter un artiste</div>
+              <div className="add-sub">Importer ses CSV DistroKid, TuneCore…</div>
+            </div>
           </div>
           </>
         )}
@@ -257,6 +274,11 @@ export default function Home() {
           padding: 18px; cursor: pointer; transition: border-color .2s, transform .15s;
           display: flex; flex-direction: column; gap: 14px;
         }
+        .add-artist-card { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; min-height:120px; border:1.5px dashed #1e1e1e !important; }
+        .add-artist-card:hover { border-color:#444 !important; }
+        .add-icon { font-size:24px; font-weight:300; color:#444; line-height:1; }
+        .add-label { font-size:14px; font-weight:700; color:#555; }
+        .add-sub { font-size:11px; color:#333; text-align:center; }
         .artist-card:hover { border-color: #2a2a2a; transform: translateY(-1px); }
         .ac-top { display: flex; align-items: center; gap: 9px; }
         .ac-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
