@@ -163,7 +163,7 @@ export default function RecoupeIndex() {
               })
             )}
 
-            <button className="new-project-btn" onClick={() => alert('Formulaire nouveau projet — à venir')}>
+            <button className="new-project-btn" onClick={() => setShowModal(true)}>
               + Nouveau projet (single, série, EP, album…)
             </button>
           </>
