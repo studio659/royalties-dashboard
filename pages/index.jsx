@@ -11,8 +11,8 @@ export default function Home() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [artistStats, setArtistStats] = useState({})
-  const [importTarget, setImportTarget] = useState(null) // { artist, source }
-  const [dynamicArtists, setDynamicArtists] = useState(null) // null = not yet loaded
+  const [importTarget, setImportTarget] = useState(null)
+  const [dynamicArtists, setDynamicArtists] = useState(null)
   const [showAddArtist, setShowAddArtist] = useState(false)
   const [lastUpdated, setLastUpdated] = useState(null)
 
@@ -38,11 +38,14 @@ export default function Home() {
 
   async function fetchStats() {
     setLoading(true)
-    // Paginate through all royalties (18K+ rows)
+
+    // Récupère les données déjà agrégées par (artist, month) via la vue SQL.
+    // Une vue Postgres pré-calcule SUM(usd), SUM(qty) → max ~100 lignes
+    // au lieu de 200K+ lignes brutes (sinon timeout/coupure pagination).
     let data = [], from = 0
     while (true) {
       const { data: chunk, error } = await supabase
-        .from('royalties')
+        .from('royalties_monthly')
         .select('month, artist, usd, qty')
         .order('month', { ascending: false })
         .range(from, from + 999)
@@ -54,18 +57,19 @@ export default function Home() {
     if (!data.length) { setLoading(false); return }
 
     const stats = {}
-    const artistList = (dynamicArtists || []).map(a => a.name).filter(n => n !== 'NoSnow') // exclude hors-label
+    const artistList = (dynamicArtists || []).map(a => a.name).filter(n => n !== 'NoSnow')
     for (const artist of artistList.length ? artistList : ARTISTS) {
       const ar = data.filter(r => r.artist === artist)
       const months = [...new Set(ar.map(r => r.month))].sort().reverse()
       const lastM = months[0], prevM = months[1]
 
-      const lastUsd = ar.filter(r => r.month === lastM).reduce((s,r) => s+r.usd, 0)
-      const prevUsd = ar.filter(r => r.month === prevM).reduce((s,r) => s+r.usd, 0)
-      const lastQty = ar.filter(r => r.month === lastM).reduce((s,r) => s+r.qty, 0)
-      const prevQty = ar.filter(r => r.month === prevM).reduce((s,r) => s+r.qty, 0)
-      const totalUsd = ar.reduce((s,r) => s+r.usd, 0)
-      const totalQty = ar.reduce((s,r) => s+r.qty, 0)
+      // Chaque (artist, month) n'a qu'une ligne dans la vue → reduce ramène la somme directement
+      const lastUsd = ar.filter(r => r.month === lastM).reduce((s,r) => s+Number(r.usd||0), 0)
+      const prevUsd = ar.filter(r => r.month === prevM).reduce((s,r) => s+Number(r.usd||0), 0)
+      const lastQty = ar.filter(r => r.month === lastM).reduce((s,r) => s+Number(r.qty||0), 0)
+      const prevQty = ar.filter(r => r.month === prevM).reduce((s,r) => s+Number(r.qty||0), 0)
+      const totalUsd = ar.reduce((s,r) => s+Number(r.usd||0), 0)
+      const totalQty = ar.reduce((s,r) => s+Number(r.qty||0), 0)
 
       stats[artist] = {
         lastMonth: lastM,
