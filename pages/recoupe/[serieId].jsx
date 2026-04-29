@@ -45,6 +45,28 @@ export default function SerieDetail() {
     setLoading(false)
   }
 
+  function exportCSV() {
+    const rows = [['Titre','Budget €','Généré $','Recoupe %','Reste $','Streams','Estimation']]
+    singles.forEach(s => {
+      const st = getSingleStats(s)
+      rows.push([
+        s.title,
+        Math.round(s.budget_eur || 0),
+        st.totalUsd.toFixed(2),
+        st.pct.toFixed(1),
+        st.remaining.toFixed(2),
+        st.totalQty,
+        st.monthsLeft ? `~${st.monthsLeft} mois` : st.hasEnoughData ? '—' : '<3 mois données'
+      ])
+    })
+    const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `recoupe_${serie.name.replace(/[^a-z0-9]/gi,'_')}.csv`
+    a.click()
+  }
+
   function getSingleStats(single) {
     const rows = royalties.filter(r =>
       r.artist === single.artist &&
@@ -60,8 +82,9 @@ export default function SerieDetail() {
     const months = Object.keys(byMonth).sort()
     const last3 = months.slice(-3)
     const avg = last3.length > 0 ? last3.reduce((s, m) => s + byMonth[m], 0) / last3.length : 0
-    const monthsLeft = avg > 0 && remaining > 0 ? Math.ceil(remaining / avg) : null
-    return { totalUsd, totalQty, budgetUsd, pct, remaining, monthsLeft, months }
+    const hasEnoughData = months.length >= 3
+    const monthsLeft = hasEnoughData && avg > 0 && remaining > 0 ? Math.ceil(remaining / avg) : null
+    return { totalUsd, totalQty, budgetUsd, pct, remaining, monthsLeft, months, hasEnoughData }
   }
 
   if (loading || !serie) return (
@@ -111,7 +134,13 @@ export default function SerieDetail() {
         </div>
 
         {/* KPIs */}
-        <div className="kpi-row">
+        <div style={{display:'flex',justifyContent:'flex-end',marginBottom:12}}>
+          <button onClick={exportCSV} style={{background:'none',border:'1px solid #1e1e1e',borderRadius:6,color:'#555',fontSize:12,padding:'6px 14px',cursor:'pointer',fontFamily:'inherit',transition:'all .2s'}}
+            onMouseOver={e=>e.target.style.color='#eee'} onMouseOut={e=>e.target.style.color='#555'}>
+            ↓ Exporter CSV
+          </button>
+        </div>
+      <div className="kpi-row">
           <div className="kpi">
             <div className="kpi-l">Budget total investi</div>
             <div className="kpi-v">€{Math.round(totalBudgetEur).toLocaleString('fr-FR')}</div>
@@ -164,7 +193,7 @@ export default function SerieDetail() {
                 </div>
                 <div className="si-bar-label" style={{ color: pctColor }}>
                   {s.pct.toFixed(1)}%
-                  {s.monthsLeft === 0 ? ' · recoupé !' : s.monthsLeft ? ` · ~${s.monthsLeft} mois` : s.months.length < 3 ? ' · titre récent' : ''}
+                  {s.monthsLeft === 0 ? ' · recoupé ✓' : s.monthsLeft ? ` · ~${s.monthsLeft} mois` : !s.hasEnoughData ? ' · données insuffisantes (<3 mois)' : ' · tendance instable'}
                 </div>
               </div>
               <div className="si-amounts">
