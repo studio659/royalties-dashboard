@@ -66,13 +66,13 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
       }
 
       // Log the import
-      const months = filteredMonths.sort()
+      const sortedMonths = filteredMonths.slice().sort()
       await supabase.from('import_logs').insert({
         artist: artist,
         source: source || 'DistroKid',
         filename: file?.name || 'unknown',
         rows_imported: filtered.length,
-        months_covered: months.length > 0 ? `${months[0]} → ${months[months.length-1]}` : '',
+        months_covered: sortedMonths.length > 0 ? `${sortedMonths[0]} → ${sortedMonths[sortedMonths.length-1]}` : '',
       })
       setStatus('done')
       setMessage(`✓ ${filtered.length} lignes · ${filteredMonths.length} mois importés`)
