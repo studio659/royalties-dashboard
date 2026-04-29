@@ -52,8 +52,7 @@ export default function SingleDetail() {
       from += 1000
     }
     // Filter by title similarity
-    const keyword = s.title.toLowerCase().substring(0, 8)
-    const filtered = allRoy.filter(r => r.title.toLowerCase().includes(keyword))
+    const filtered = allRoy.filter(r => r.title.toLowerCase() === s.title.toLowerCase())
     filtered.sort((a,b) => a.month.localeCompare(b.month))
     setRoyaltyRows(filtered)
     setLoading(false)
