@@ -1,7 +1,38 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { parseDistroKid, parseTuneCore } from '../lib/csvParser'
+import { parseDistroKid, parseTuneCore, parseWarner, parseWarnerPDF } from '../lib/csvParser'
 import { useRate } from '../lib/rateContext'
+
+async function extractPDFText(arrayBuffer) {
+  if (!window.pdfjsLib) {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script')
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
+      script.onload = resolve; script.onerror = reject
+      document.head.appendChild(script)
+    })
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+  }
+  const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise
+  let fullText = ''
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i)
+    const content = await page.getTextContent()
+    const linesByY = {}
+    for (const item of content.items) {
+      const y = Math.round(item.transform[5])
+      if (!linesByY[y]) linesByY[y] = []
+      linesByY[y].push({ x: item.transform[4], str: item.str })
+    }
+    const sortedYs = Object.keys(linesByY).map(Number).sort((a, b) => b - a)
+    for (const y of sortedYs) {
+      const items = linesByY[y].sort((a, b) => a.x - b.x)
+      fullText += items.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim() + '\n'
+    }
+  }
+  return fullText
+}
 
 const PRESET_COLORS = [
   '#f97316','#3b82f6','#a78bfa','#eab308',
@@ -54,6 +85,18 @@ export default function AddArtistModal({ onClose, onSuccess }) {
         rows = result.rows
       } else if (source === 'tunecore') {
         const result = parseTuneCore(text)
+        rows = result.rows
+      } else if (source === 'warner') {
+        const isPDF = file.name.toLowerCase().endsWith('.pdf')
+        let result
+        if (isPDF) {
+          // PDF : extraire le texte via PDF.js (même logique que ImportModal)
+          const arrayBuffer = await file.arrayBuffer()
+          const pdfText = await extractPDFText(arrayBuffer)
+          result = parseWarnerPDF(pdfText, eurRate)
+        } else {
+          result = parseWarner(text, eurRate)
+        }
         rows = result.rows
       }
 
