@@ -29,10 +29,16 @@ export default function MainNav({ title, showBack, onBack }) {
             </div>
           )}
           {title && showBack && <span className="mn-title">{title}</span>}
-          {!showBack && <span className="mn-title" style={{ color: '#555', fontSize: 13 }}></span>}
         </div>
 
         <div className="mn-right">
+          {!showBack && (
+            <>
+              <button className="mn-icon-btn" onClick={() => router.push('/forecast')} title="Prévisionnel">📈</button>
+              <button className="mn-icon-btn" onClick={() => router.push('/notifications')} title="Alertes">🔔</button>
+              <button className="mn-icon-btn" onClick={() => router.push('/settings')} title="Paramètres">⚙️</button>
+            </>
+          )}
           <button className="mn-logout" onClick={handleLogout} title="Déconnexion">⎋</button>
         </div>
       </nav>
@@ -76,6 +82,13 @@ export default function MainNav({ title, showBack, onBack }) {
         .mn-back:hover { color: #eee; }
         .mn-title { font-size: 14px; font-weight: 700; color: #eee; }
         .mn-right { display: flex; align-items: center; gap: 8px; }
+        .mn-icon-btn {
+          background: none; border: none; color: #444; font-size: 16px;
+          width: 30px; height: 30px; display: flex; align-items: center;
+          justify-content: center; cursor: pointer; border-radius: 6px;
+          transition: background .2s;
+        }
+        .mn-icon-btn:hover { background: #1a1a1a; color: #eee; }
         .mn-logout {
           background: none; border: 1px solid #1e1e1e; border-radius: 6px;
           color: #444; font-size: 15px; width: 30px; height: 30px;
@@ -108,6 +121,12 @@ export default function MainNav({ title, showBack, onBack }) {
         }
         .main-tab:hover:not(.active) { color: #888; }
         .main-tab.active { color: #eee; border-bottom-color: #eee; }
+        @media (max-width: 600px) {
+          .main-nav { padding: 0 12px; height: 46px; }
+          .mn-title { font-size: 13px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .main-tabs { padding: 0 12px; top: 46px; }
+          .main-tab { padding: 10px 14px; font-size: 12px; }
+        }
       `}</style>
     </>
   )
