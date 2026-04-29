@@ -3,6 +3,32 @@ import * as XLSX from 'xlsx'
 import { supabase } from '../lib/supabase'
 import { ARTISTS, COLORS } from '../lib/artists'
 
+function BudgetSection({ title, budgets, parseExcel, addLine, removeLine, updateLine, getBudgetTotal }) {
+  return (
+    <div>
+      <div className="bs-row">
+        <span className="bs-label">Budget</span>
+        <label className="upload-budget-btn">
+          ↑ Importer Excel / CSV
+          <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>parseExcel(e.target.files[0],title)}/>
+        </label>
+      </div>
+      <div className="field-hint" style={{marginBottom:10}}>Format : colonne A = Poste · colonne G ou B = Montant €</div>
+      {(budgets[title]?.lines||[]).map((line,li) => (
+        <div key={li} className="line-row">
+          <input type="text" value={line.label} onChange={e=>updateLine(title,li,'label',e.target.value)} placeholder="Poste de dépense..." className="line-label"/>
+          <div className="line-amt-wrap"><span className="cur">€</span>
+            <input type="number" value={line.amount} onChange={e=>updateLine(title,li,'amount',e.target.value)} placeholder="0" min="0" className="line-amt"/>
+          </div>
+          <button className="rm-line" onClick={()=>removeLine(title,li)}>✕</button>
+        </div>
+      ))}
+      <button className="add-line-btn" onClick={()=>addLine(title)}>+ Ligne</button>
+      {getBudgetTotal(title)>0 && <div className="budget-tot">Total : €{getBudgetTotal(title).toLocaleString('fr-FR',{minimumFractionDigits:0,maximumFractionDigits:2})}</div>}
+    </div>
+  )
+}
+
 export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
   const [step, setStep] = useState(1)
   const [saving, setSaving] = useState(false)
@@ -128,7 +154,7 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
         const status = String(row[2] || '').toLowerCase().includes('pay') ? 'paid' : 'pending'
         if (label && !isNaN(amount) && amount >= 0) lines.push({ label, amount: String(amount), status })
       }
-      if (!lines.length) { setBudgetError('Aucune ligne valide. Colonnes : Poste | Montant € | payé/en attente'); return }
+      if (!lines.length) { setBudgetError('Aucune ligne valide trouvée dans ce fichier.'); return }
       setBudgets(prev => ({ ...prev, [title]: { ...prev[title], lines } }))
     } catch (e) { setBudgetError('Erreur : ' + e.message) }
   }
@@ -151,16 +177,24 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
       }).select().single()
       if (sErr) throw sErr
 
+      const isGlobal = type !== 'single'
+      const globalBudget = budgets['_global'] || { lines: [], releaseDate: '' }
+      const globalTotal = getBudgetTotal('_global')
+      const perTitleBudget = selectedTitles.length > 0 && isGlobal ? globalTotal / selectedTitles.length : 0
+
       for (const title of selectedTitles) {
-        const b = budgets[title] || { lines: [], releaseDate: '' }
+        const b = isGlobal ? { ...globalBudget, releaseDate: globalBudget.releaseDate || '' } : (budgets[title] || { lines: [], releaseDate: '' })
+        const budgetEur = isGlobal ? perTitleBudget : getBudgetTotal(title)
         const { data: single, error: siErr } = await supabase.from('singles').insert({
           series_id: serie.id, artist, title,
           release_date: b.releaseDate || null,
-          budget_eur: getBudgetTotal(title),
+          budget_eur: budgetEur,
           status: 'active',
         }).select().single()
         if (siErr) throw siErr
-        const validLines = (b.lines || []).filter(l => l.label && parseFloat(l.amount) >= 0)
+        // For global budget, only insert lines on the first single to avoid duplicates
+        const isFirstTitle = selectedTitles.indexOf(title) === 0
+        const validLines = (!isGlobal || isFirstTitle) ? (b.lines || []).filter(l => l.label && parseFloat(l.amount) >= 0) : []
         if (validLines.length > 0) {
           await supabase.from('budget_lines').insert(
             validLines.map(l => ({ single_id: single.id, label: l.label, amount_eur: parseFloat(l.amount) || 0, status: l.status }))
@@ -252,11 +286,13 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
             </div>
           )}
 
-          {/* ── STEP 2 : BUDGET PAR TITRE ── */}
+          {/* ── STEP 2 : BUDGET ── */}
           {step === 2 && (
             <div>
               {budgetError && <div className="error-msg">{budgetError}</div>}
-              {selectedTitles.map(title => (
+
+              {/* Single → un budget par titre */}
+              {type === 'single' ? selectedTitles.map(title => (
                 <div key={title} className="single-block">
                   <div className="sb-header">
                     <div className="sb-title">{title}</div>
@@ -265,38 +301,39 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
                       <input type="month" value={budgets[title]?.releaseDate||''} onChange={e=>updateBudget(title,'releaseDate',e.target.value)}/>
                     </div>
                   </div>
-
-                  <div className="bs-row">
-                    <span className="bs-label">Budget</span>
-                    <label className="upload-budget-btn">
-                      ↑ Importer Excel / CSV
-                      <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={e=>parseExcel(e.target.files[0],title)}/>
-                    </label>
-                  </div>
-                  <div className="field-hint" style={{marginBottom:10}}>Colonnes : A = Poste · B = Montant € · C = payé / en attente</div>
-
-                  {(budgets[title]?.lines||[]).map((line,li) => (
-                    <div key={li} className="line-row">
-                      <input type="text" value={line.label} onChange={e=>updateLine(title,li,'label',e.target.value)}
-                        placeholder="Poste de dépense..." className="line-label"/>
-                      <div className="line-amt-wrap">
-                        <span className="cur">€</span>
-                        <input type="number" value={line.amount} onChange={e=>updateLine(title,li,'amount',e.target.value)}
-                          placeholder="0" min="0" className="line-amt"/>
-                      </div>
-                      <select value={line.status} onChange={e=>updateLine(title,li,'status',e.target.value)} className="line-st">
-                        <option value="paid">payé</option>
-                        <option value="pending">en attente</option>
-                      </select>
-                      <button className="rm-line" onClick={()=>removeLine(title,li)}>✕</button>
-                    </div>
-                  ))}
-                  <button className="add-line-btn" onClick={()=>addLine(title)}>+ Ligne</button>
-                  {getBudgetTotal(title)>0 && (
-                    <div className="budget-tot">Total : €{getBudgetTotal(title).toLocaleString('fr-FR',{minimumFractionDigits:0,maximumFractionDigits:2})}</div>
-                  )}
+                  <BudgetSection title={title} budgets={budgets} budgetError={budgetError}
+                    parseExcel={parseExcel} addLine={addLine} removeLine={removeLine}
+                    updateLine={updateLine} getBudgetTotal={getBudgetTotal} />
                 </div>
-              ))}
+              )) : (
+                /* Série / EP / Album → un seul budget global */
+                <div>
+                  <div className="hint-box">
+                    Un seul budget pour l'ensemble du projet — il sera réparti automatiquement entre les {selectedTitles.length} titres.
+                  </div>
+
+                  <div className="field">
+                    <label>Date de sortie (optionnel)</label>
+                    <input type="month" value={budgets['_global']?.releaseDate||''} onChange={e=>updateBudget('_global','releaseDate',e.target.value)}/>
+                  </div>
+
+                  <div className="single-block">
+                    <BudgetSection title="_global" budgets={budgets} budgetError={budgetError}
+                      parseExcel={parseExcel} addLine={addLine} removeLine={removeLine}
+                      updateLine={updateLine} getBudgetTotal={getBudgetTotal} />
+                  </div>
+
+                  <div className="titles-recap">
+                    <div className="tr-label">Titres inclus</div>
+                    {selectedTitles.map(t => (
+                      <div key={t} className="tr-item">
+                        <span className="tr-dot" style={{background: COLORS[artist]||'#f59e0b'}}/>
+                        {t}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -442,6 +479,10 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
         .btn-next,.btn-save{color:#000;border:none;border-radius:7px;font-size:13px;font-weight:700;padding:9px 20px;cursor:pointer;font-family:inherit;transition:opacity .2s}
         .btn-next:hover,.btn-save:hover{opacity:.85}
         .btn-next:disabled,.btn-save:disabled{opacity:.4;cursor:default}
+        .titles-recap{background:#0f0f0f;border:1px solid #1e1e1e;border-radius:8px;padding:14px 16px;margin-top:12px}
+        .tr-label{font-size:10px;color:#444;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
+        .tr-item{display:flex;align-items:center;gap:8px;font-size:13px;color:#bbb;padding:4px 0}
+        .tr-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
       `}</style>
     </div>
   )
