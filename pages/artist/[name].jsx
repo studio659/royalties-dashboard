@@ -143,6 +143,26 @@ export default function ArtistPage() {
   const maxPlatUsd  = byPlat[0]?.[1].usd || 1
   const maxCountryQty = byCountry[0]?.[1].qty || 1
 
+  // Rate per stream by platform (usd/stream in cents) over last 12 months
+  const platRates = useMemo(() => {
+    const recent = months.slice(-12)
+    return recent.map(m => {
+      const entry = { month: m.slice(2) }
+      const monthRows = filtered.filter(r => r.month === m)
+      // Top 5 platforms
+      const platMap = {}
+      monthRows.forEach(r => {
+        if (!platMap[r.store]) platMap[r.store] = { usd: 0, qty: 0 }
+        platMap[r.store].usd += r.usd
+        platMap[r.store].qty += r.qty
+      })
+      Object.entries(platMap).forEach(([p, v]) => {
+        if (v.qty > 0) entry[p] = parseFloat((v.usd / v.qty * 1000).toFixed(4)) // millicents
+      })
+      return entry
+    })
+  }, [filtered, months])
+
   const platPie = byPlat.slice(0,8).map(([name,v],i) => ({ name, value: Math.round(v.usd), color: PLAT_COLORS[i] }))
 
   if (loading) return (
