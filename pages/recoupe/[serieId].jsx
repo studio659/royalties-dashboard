@@ -48,7 +48,7 @@ export default function SerieDetail() {
   function getSingleStats(single) {
     const rows = royalties.filter(r =>
       r.artist === single.artist &&
-      r.title.toLowerCase().includes(single.title.toLowerCase().substring(0, 10))
+      r.title.toLowerCase() === single.title.toLowerCase()
     )
     const totalUsd = rows.reduce((s, r) => s + r.usd, 0)
     const totalQty = rows.reduce((s, r) => s + r.qty, 0)
