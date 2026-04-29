@@ -247,7 +247,7 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
             </div>
             {isWarner && (
               <div className="dz-hint">
-                Format Warner France · TSV · montants en € convertis en $ (taux : 1€ = {(1/eurRate).toFixed(3)}$)
+                Format Warner France · montants stockés en € natif · taux affiché : 1$ = {eurRate}€
               </div>
             )}
             {isTuneCore && <div className="dz-hint">TuneCore → Revenus & Statistiques → Télécharger rapports de vente mensuels</div>}
