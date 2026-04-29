@@ -30,13 +30,20 @@ export default function Home() {
 
   async function fetchStats() {
     setLoading(true)
-    // Fetch last 2 months per artist efficiently
-    const { data, error } = await supabase
-      .from('royalties')
-      .select('month, artist, usd, qty')
-      .order('month', { ascending: false })
-
-    if (error || !data) { setLoading(false); return }
+    // Paginate through all royalties (18K+ rows)
+    let data = [], from = 0
+    while (true) {
+      const { data: chunk, error } = await supabase
+        .from('royalties')
+        .select('month, artist, usd, qty')
+        .order('month', { ascending: false })
+        .range(from, from + 999)
+      if (error || !chunk?.length) break
+      data = data.concat(chunk)
+      if (chunk.length < 1000) break
+      from += 1000
+    }
+    if (!data.length) { setLoading(false); return }
 
     const stats = {}
     for (const artist of ARTISTS) {
