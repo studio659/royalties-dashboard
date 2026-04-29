@@ -84,6 +84,9 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
 
     for (let fi = 0; fi < files.length; fi++) {
       const file = files[fi]
+      // statement_id = nom du fichier (unique par statement Warner / CSV DistroKid / etc.)
+      // Réimporter le même fichier → remplace ses lignes. Nouveau fichier → coexiste.
+      const statementId = file.name
       updateResult(fi, 'running', 'Lecture…')
 
       try {
@@ -122,24 +125,43 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
 
         const filteredMonths = [...new Set(filtered.map(r => r.month))]
         const isAggregated = filtered.some(r => r.store === 'Warner (PDF agrégé)')
-        updateResult(fi, 'running', `${filtered.length} ligne${filtered.length > 1 ? 's' : ''}${isAggregated ? ' (agrégé)' : ''} · suppression anciens mois…`)
+        updateResult(fi, 'running', `${filtered.length} ligne${filtered.length > 1 ? 's' : ''}${isAggregated ? ' (agrégé)' : ''} · nettoyage…`)
 
-        const MONTH_BATCH = 5
-        for (let i = 0; i < filteredMonths.length; i += MONTH_BATCH) {
-          const mb = filteredMonths.slice(i, i + MONTH_BATCH)
-          let q = supabase.from('royalties').delete().in('month', mb)
-          if (artist) q = q.eq('artist', artist)
-          const { error } = await q
+        // ── 1. Supprime les lignes existantes pour CE statement (cas réimport) ──
+        {
+          let dq = supabase.from('royalties').delete().eq('statement_id', statementId)
+          if (artist) dq = dq.eq('artist', artist)
+          const { error } = await dq
           if (error) throw error
-          await sleep(80)
         }
 
+        // ── 2. Nettoyage transitoire : supprime les lignes "legacy" (avant migration)
+        //    qui couvrent les mêmes mois+artiste, pour éviter les doublons pendant
+        //    la transition. Une fois toutes les sources réimportées, ce code n'a
+        //    plus aucun effet (plus aucune ligne legacy en base).
+        {
+          const MONTH_BATCH = 5
+          for (let i = 0; i < filteredMonths.length; i += MONTH_BATCH) {
+            const mb = filteredMonths.slice(i, i + MONTH_BATCH)
+            let lq = supabase.from('royalties').delete()
+              .in('month', mb)
+              .like('statement_id', '__legacy_%')
+            if (artist) lq = lq.eq('artist', artist)
+            const { error } = await lq
+            if (error) console.warn('Legacy cleanup non bloquant :', error)
+            await sleep(50)
+          }
+        }
+
+        // ── 3. Insert avec statement_id sur chaque ligne ──
+        const rowsWithStmt = filtered.map(r => ({ ...r, statement_id: statementId }))
+
         const BATCH = 100
-        for (let i = 0; i < filtered.length; i += BATCH) {
-          const batch = filtered.slice(i, i + BATCH)
+        for (let i = 0; i < rowsWithStmt.length; i += BATCH) {
+          const batch = rowsWithStmt.slice(i, i + BATCH)
           const { error } = await supabase.from('royalties').insert(batch)
           if (error) throw new Error(error.message)
-          const filePct = Math.round(((i + batch.length) / filtered.length) * 100)
+          const filePct = Math.round(((i + batch.length) / rowsWithStmt.length) * 100)
           const globalPct = Math.round(((fi / files.length) + (filePct / 100 / files.length)) * 100)
           setProgress(globalPct)
           updateResult(fi, 'running', `Upload… ${filePct}%`)
