@@ -31,15 +31,18 @@ export default function Home() {
   }, [])
 
   useEffect(() => {
-    if (user) { fetchArtists(); fetchStats() }
+    if (user) { loadAll() }
   }, [user])
 
-  async function fetchArtists() {
-    const { data } = await supabase.from('artists').select('name, color, sources').order('created_at')
-    if (data?.length) setDynamicArtists(data)
+  async function loadAll() {
+    // Fetch artists FIRST, then pass the result directly to fetchStats
+    // (ne pas dépendre du state dynamicArtists qui n'est pas encore mis à jour)
+    const { data: artistData } = await supabase.from('artists').select('name, color, sources').order('created_at')
+    if (artistData?.length) setDynamicArtists(artistData)
+    await fetchStats(artistData)
   }
 
-  async function fetchStats() {
+  async function fetchStats(artistData) {
     setLoading(true)
     const { data: rateSetting } = await supabase.from('settings').select('value').eq('key', 'eur_rate').single()
     const rate = rateSetting ? parseFloat(rateSetting.value) : 0.92
@@ -59,7 +62,8 @@ export default function Home() {
     if (!data.length) { setLoading(false); return }
 
     const stats = {}
-    const artistList = (dynamicArtists || []).map(a => a.name).filter(n => n !== 'NoSnow')
+    const resolved = artistData || dynamicArtists
+    const artistList = (resolved || []).map(a => a.name).filter(n => n !== 'NoSnow')
     for (const artist of artistList.length ? artistList : ARTISTS) {
       const ar = data.filter(r => r.artist === artist)
       const months = [...new Set(ar.map(r => r.month))].sort().reverse()
@@ -226,7 +230,7 @@ export default function Home() {
 
       {importTarget && (
         <ImportModal artist={importTarget.artist} source={importTarget.source}
-          onClose={()=>setImportTarget(null)} onSuccess={()=>{setImportTarget(null);fetchStats()}} />
+          onClose={()=>setImportTarget(null)} onSuccess={()=>{setImportTarget(null);loadAll()}} />
       )}
 
       <style jsx>{`
