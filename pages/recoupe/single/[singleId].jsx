@@ -38,14 +38,24 @@ export default function SingleDetail() {
     setSingle(s)
     setSerie(s.series)
 
-    const { data: r } = await supabase
-      .from('royalties')
-      .select('month, usd, qty, store')
-      .eq('artist', s.artist)
-      .ilike('title', `%${s.title.substring(0, 10)}%`)
-      .order('month')
-
-    setRoyaltyRows(r || [])
+    // Fetch all royalties for this artist then filter by title
+    let allRoy = [], from = 0
+    while (true) {
+      const { data, error } = await supabase
+        .from('royalties')
+        .select('month, usd, qty, store, title')
+        .eq('artist', s.artist)
+        .range(from, from + 999)
+      if (error || !data || data.length === 0) break
+      allRoy = allRoy.concat(data)
+      if (data.length < 1000) break
+      from += 1000
+    }
+    // Filter by title similarity
+    const keyword = s.title.toLowerCase().substring(0, 8)
+    const filtered = allRoy.filter(r => r.title.toLowerCase().includes(keyword))
+    filtered.sort((a,b) => a.month.localeCompare(b.month))
+    setRoyaltyRows(filtered)
     setLoading(false)
   }
 
