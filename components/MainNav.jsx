@@ -34,8 +34,6 @@ export default function MainNav({ title, showBack, onBack }) {
         <div className="mn-right">
           {!showBack && (
             <>
-              <button className="mn-icon-btn" onClick={() => router.push('/forecast')} title="Prévisionnel">📈</button>
-              <button className="mn-icon-btn" onClick={() => router.push('/notifications')} title="Alertes">🔔</button>
               <button className="mn-icon-btn" onClick={() => router.push('/settings')} title="Paramètres">⚙️</button>
             </>
           )}
