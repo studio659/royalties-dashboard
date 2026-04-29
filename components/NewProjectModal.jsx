@@ -272,7 +272,7 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
                   <div key={title} className="bblock">
                     <div className="bb-top">
                       <div className="bb-title">{isSingle ? title : 'Budget du projet'}</div>
-                      <input type="month" value={b.releaseDate} onChange={e=>setRD(title,e.target.value)} className="rd-input" placeholder="Date de sortie"/>
+                      <input type="date" value={b.releaseDate} onChange={e=>setRD(title,e.target.value)} className="rd-input" placeholder="Date de sortie"/>
                     </div>
 
                     {/* IMPORT ZONE */}
