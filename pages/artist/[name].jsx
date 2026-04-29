@@ -253,7 +253,7 @@ export default function ArtistPage() {
             <div className="two-col">
               <div>
                 <div className="chart-label">Par royalties</div>
-                {byTitle.slice(0,10).map(([t,v]) => (
+                {byTitle.map(([t,v]) => (
                   <HBar key={t} name={t} value={v.usd} maxValue={maxTitleUsd} color={color} right={fmtStreams(v.qty)+' str'} />
                 ))}
               </div>
