@@ -152,7 +152,16 @@ export default function Home() {
 
           {/* ARTIST GRID */}
           <div className="artist-grid">
-            {(dynamicArtists || ARTISTS.map(a => ({ name: a, color: COLORS[a], sources: ARTIST_SOURCES[a] || ['distrokid'] }))).map(artistObj => {
+            {(dynamicArtists || ARTISTS.map(a => ({ name: a, color: COLORS[a], sources: ARTIST_SOURCES[a] || ['distrokid'] })))
+              .slice()
+              .sort((a, b) => {
+                const nameA = typeof a === 'string' ? a : a.name
+                const nameB = typeof b === 'string' ? b : b.name
+                const totalA = artistStats[nameA]?.totalUsd || 0
+                const totalB = artistStats[nameB]?.totalUsd || 0
+                return totalB - totalA
+              })
+              .map(artistObj => {
               const artist = typeof artistObj === 'string' ? artistObj : artistObj.name
               const s = artistStats[artist] || {}
               const color = typeof artistObj === 'string' ? COLORS[artist] : (artistObj.color || COLORS[artist] || '#888')
