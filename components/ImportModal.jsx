@@ -65,6 +65,15 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
         await sleep(150)
       }
 
+      // Log the import
+      const months = filteredMonths.sort()
+      await supabase.from('import_logs').insert({
+        artist: artist,
+        source: source || 'DistroKid',
+        filename: file?.name || 'unknown',
+        rows_imported: filtered.length,
+        months_covered: months.length > 0 ? `${months[0]} → ${months[months.length-1]}` : '',
+      })
       setStatus('done')
       setMessage(`✓ ${filtered.length} lignes · ${filteredMonths.length} mois importés`)
       setTimeout(() => { onSuccess?.(); onClose?.() }, 1800)
