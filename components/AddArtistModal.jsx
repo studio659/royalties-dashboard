@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { parseDistroKid, parseTuneCore } from '../lib/csvParser'
+import { useRate } from '../lib/rateContext'
 
 const PRESET_COLORS = [
   '#f97316','#3b82f6','#a78bfa','#eab308',
@@ -11,16 +12,17 @@ const PRESET_COLORS = [
 const SOURCES = [
   { id: 'distrokid', label: 'DistroKid', hint: 'Sales Report CSV' },
   { id: 'tunecore',  label: 'TuneCore',  hint: 'Royalty Report CSV' },
-  { id: 'warner',    label: 'Warner',    hint: 'Rapport Warner (bientôt)' },
+  { id: 'warner',    label: 'Warner',    hint: 'Rapport Warner (.txt ou .pdf)' },
 ]
 
 export default function AddArtistModal({ onClose, onSuccess }) {
-  const [step, setStep] = useState(1) // 1: infos, 2: import CSV
+  const { rate: eurRate } = useRate()
+  const [step, setStep] = useState(1)
   const [name, setName] = useState('')
   const [color, setColor] = useState('#f97316')
   const [sources, setSources] = useState(['distrokid'])
   const [saving, setSaving] = useState(false)
-  const [importStatus, setImportStatus] = useState({}) // { distrokid: { status, msg } }
+  const [importStatus, setImportStatus] = useState({})
   const [newArtist, setNewArtist] = useState(null)
 
   function toggleSource(id) {
@@ -45,31 +47,45 @@ export default function AddArtistModal({ onClose, onSuccess }) {
     try {
       const text = await file.text()
       let rows = []
-      if (source === 'distrokid') rows = parseDistroKid(text)
-      else if (source === 'tunecore') rows = parseTuneCore(text)
 
-      // Override artist name to match the newly created artist
+      // Fix: destructure {rows, months} from parser
+      if (source === 'distrokid') {
+        const result = parseDistroKid(text)
+        rows = result.rows
+      } else if (source === 'tunecore') {
+        const result = parseTuneCore(text)
+        rows = result.rows
+      }
+
+      // Override artist name + ensure amount/currency set
       const normalized = rows
-        .filter(r => r.artist && r.usd !== undefined)
-        .map(r => ({ ...r, artist: name.trim() }))
+        .filter(r => r.artist && (r.usd !== undefined || r.amount !== undefined))
+        .map(r => ({
+          ...r,
+          artist: name.trim(),
+          amount: r.amount ?? r.usd ?? 0,
+          currency: r.currency || 'USD',
+        }))
 
       if (!normalized.length) {
         setImportStatus(p => ({ ...p, [source]: { status: 'error', msg: 'Aucune ligne valide trouvée.' } }))
         return
       }
 
-      // Delete existing and insert
       const months = [...new Set(normalized.map(r => r.month))]
+
+      // Delete existing rows for these months
       for (let i = 0; i < months.length; i += 5) {
         const mb = months.slice(i, i + 5)
         await supabase.from('royalties').delete().in('month', mb).eq('artist', name.trim())
       }
+
+      // Insert in batches
       for (let i = 0; i < normalized.length; i += 100) {
         const { error } = await supabase.from('royalties').insert(normalized.slice(i, i + 100))
         if (error) throw error
       }
 
-      // Log import
       const sorted = months.sort()
       await supabase.from('import_logs').insert({
         artist: name.trim(), source, filename: file.name,
@@ -105,18 +121,12 @@ export default function AddArtistModal({ onClose, onSuccess }) {
         </div>
 
         <div className="mb">
-
           {step === 1 && (
             <>
               <div className="field">
                 <label>Nom de l'artiste</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  placeholder="ex: Sherfflazone"
-                  autoFocus
-                />
+                <input type="text" value={name} onChange={e => setName(e.target.value)}
+                  placeholder="ex: Sherfflazone" autoFocus />
                 <div className="hint">Doit correspondre exactement au nom dans tes CSV</div>
               </div>
 
@@ -124,12 +134,9 @@ export default function AddArtistModal({ onClose, onSuccess }) {
                 <label>Couleur</label>
                 <div className="color-grid">
                   {PRESET_COLORS.map(c => (
-                    <div
-                      key={c}
-                      className={`color-swatch ${color === c ? 'selected' : ''}`}
+                    <div key={c} className={`color-swatch ${color === c ? 'selected' : ''}`}
                       style={{ background: c, outline: color === c ? `2px solid ${c}` : 'none', outlineOffset: 2 }}
-                      onClick={() => setColor(c)}
-                    />
+                      onClick={() => setColor(c)} />
                   ))}
                 </div>
               </div>
@@ -138,12 +145,8 @@ export default function AddArtistModal({ onClose, onSuccess }) {
                 <label>Distribution</label>
                 <div className="source-list">
                   {SOURCES.map(s => (
-                    <div
-                      key={s.id}
-                      className={`source-item ${sources.includes(s.id) ? 'sel' : ''}`}
-                      onClick={() => s.id !== 'warner' && toggleSource(s.id)}
-                      style={{ opacity: s.id === 'warner' ? 0.5 : 1, cursor: s.id === 'warner' ? 'default' : 'pointer' }}
-                    >
+                    <div key={s.id} className={`source-item ${sources.includes(s.id) ? 'sel' : ''}`}
+                      onClick={() => toggleSource(s.id)} style={{ cursor: 'pointer' }}>
                       <div className={`src-check ${sources.includes(s.id) ? 'checked' : ''}`}>
                         {sources.includes(s.id) ? '✓' : ''}
                       </div>
@@ -164,12 +167,10 @@ export default function AddArtistModal({ onClose, onSuccess }) {
                 <span className="prev-dot" style={{ background: color }} />
                 <span className="prev-name">{name}</span>
               </div>
-
               <div className="hint-box">
-                Importe au moins un CSV pour que l'artiste apparaisse dans Suivi & Stats. Tu peux aussi passer cette étape et importer plus tard.
+                Importe au moins un CSV pour que l'artiste apparaisse dans Suivi & Stats. Tu peux aussi passer et importer plus tard.
               </div>
-
-              {sources.filter(s => s !== 'warner').map(source => {
+              {sources.map(source => {
                 const st = importStatus[source]
                 const src = SOURCES.find(s => s.id === source)
                 return (
@@ -178,12 +179,11 @@ export default function AddArtistModal({ onClose, onSuccess }) {
                       <div className="sb-label">{src?.label}</div>
                       {st?.status === 'done' && <span className="badge-ok">✓ Importé</span>}
                     </div>
-
                     {st?.status === 'done' ? (
                       <div className="msg ok">{st.msg}</div>
                     ) : (
                       <label className="upload-zone">
-                        <input type="file" accept=".csv,.txt" style={{ display: 'none' }}
+                        <input type="file" accept=".csv,.txt,.pdf" style={{ display: 'none' }}
                           onChange={e => { if (e.target.files[0]) handleCSV(e.target.files[0], source) }} />
                         {st?.status === 'loading' ? (
                           <span style={{ color: '#f59e0b' }}>{st.msg}</span>
@@ -192,7 +192,7 @@ export default function AddArtistModal({ onClose, onSuccess }) {
                         ) : (
                           <>
                             <span className="uz-icon">📂</span>
-                            <span className="uz-text">Glisse ou clique — CSV {src?.label}</span>
+                            <span className="uz-text">Glisse ou clique — {source === 'warner' ? '.txt ou .pdf Warner' : `CSV ${src?.label}`}</span>
                           </>
                         )}
                       </label>
