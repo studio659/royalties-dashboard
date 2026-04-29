@@ -2,17 +2,11 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { ARTISTS, COLORS } from '../lib/artists'
 
-const SKIP = new Set(['sous total','total','qte','prix u/ht','unit.','total ht',
-  'production','enregistrement','mixage','mastering','seminaire','achat prods',
-  'image','cover','photos promo','stylisme','release','video','relation presse',
-  'da','promotion','merchandising','transport','divers','frais divers',
-  'materiel','juridique','assurance','frais bancaires','achat','attention'])
+// Only skip pure accounting/structural rows — never filter real cost items
+const ACCOUNTING_SKIP = new Set(['sous total', 'total', 'total ht', 'prix u/ht', 'qte', 'unit.', 'attention'])
 
 function skipRow(label) {
-  const l = label.toLowerCase().trim()
-  for (const s of SKIP) { if (l.includes(s)) return true }
-  if (l === l.toUpperCase() && l.length < 30 && l.length > 1) return true
-  return false
+  return ACCOUNTING_SKIP.has(label.toLowerCase().trim())
 }
 
 export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
