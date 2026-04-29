@@ -4,8 +4,10 @@ import { parseDistroKid, parseWarner, parseTuneCore, parseWarnerPDF } from '../l
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
+// Reconstruit le texte d'un PDF ligne par ligne en groupant les items
+// par leur position Y (transform[5]). Sans ça, PDF.js joint tous les items
+// d'une page en une seule string géante et les regex avec ^...$ ne matchent jamais.
 async function extractPDFText(arrayBuffer) {
-  // Load PDF.js dynamically
   if (!window.pdfjsLib) {
     await new Promise((resolve, reject) => {
       const script = document.createElement('script')
@@ -20,11 +22,26 @@ async function extractPDFText(arrayBuffer) {
 
   const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise
   let fullText = ''
+
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i)
     const content = await page.getTextContent()
-    const pageText = content.items.map(item => item.str).join(' ')
-    fullText += pageText + '\n'
+
+    // Groupe les items par Y arrondi (les items sur la même ligne ont la même Y)
+    const linesByY = {}
+    for (const item of content.items) {
+      const y = Math.round(item.transform[5])
+      if (!linesByY[y]) linesByY[y] = []
+      linesByY[y].push({ x: item.transform[4], str: item.str })
+    }
+
+    // Tri Y descendant (haut → bas en coords PDF) puis X croissant pour chaque ligne
+    const sortedYs = Object.keys(linesByY).map(Number).sort((a, b) => b - a)
+    for (const y of sortedYs) {
+      const items = linesByY[y].sort((a, b) => a.x - b.x)
+      // Insère un espace entre les items pour préserver les colonnes
+      fullText += items.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim() + '\n'
+    }
   }
   return fullText
 }
@@ -32,10 +49,10 @@ async function extractPDFText(arrayBuffer) {
 
 export default function ImportModal({ artist, source = 'distrokid', onClose, onSuccess }) {
   const [dragging, setDragging] = useState(false)
-  const [files, setFiles] = useState([]) // list of File objects
-  const [results, setResults] = useState([]) // { file, status, message }
-  const [globalStatus, setGlobalStatus] = useState(null) // null | 'running' | 'done' | 'error'
-  const [progress, setProgress] = useState(0) // 0-100 across all files
+  const [files, setFiles] = useState([])
+  const [results, setResults] = useState([])
+  const [globalStatus, setGlobalStatus] = useState(null)
+  const [progress, setProgress] = useState(0)
   const [eurRate, setEurRate] = useState(0.92)
   const inputRef = useRef()
 
@@ -74,7 +91,6 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
         let parsed
 
         if (isWarner && isPDF) {
-          // Extract text from PDF using PDF.js
           const arrayBuffer = await file.arrayBuffer()
           const pdfText = await extractPDFText(arrayBuffer)
           parsed = parseWarnerPDF(pdfText, eurRate)
@@ -105,9 +121,9 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
         }
 
         const filteredMonths = [...new Set(filtered.map(r => r.month))]
-        updateResult(fi, 'running', `${filtered.length} lignes · suppression anciens mois…`)
+        const isAggregated = filtered.some(r => r.store === 'Warner (PDF agrégé)')
+        updateResult(fi, 'running', `${filtered.length} ligne${filtered.length > 1 ? 's' : ''}${isAggregated ? ' (agrégé)' : ''} · suppression anciens mois…`)
 
-        // Delete existing data for those months+artist
         const MONTH_BATCH = 5
         for (let i = 0; i < filteredMonths.length; i += MONTH_BATCH) {
           const mb = filteredMonths.slice(i, i + MONTH_BATCH)
@@ -118,7 +134,6 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
           await sleep(80)
         }
 
-        // Insert in batches
         const BATCH = 100
         for (let i = 0; i < filtered.length; i += BATCH) {
           const batch = filtered.slice(i, i + BATCH)
@@ -131,7 +146,6 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
           await sleep(100)
         }
 
-        // Log
         const sortedMonths = filteredMonths.slice().sort()
         await supabase.from('import_logs').insert({
           artist,
@@ -143,7 +157,10 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
 
         totalRows += filtered.length
         filteredMonths.forEach(m => totalMonths.add(m))
-        updateResult(fi, 'done', `✓ ${filtered.length} lignes · ${filteredMonths.length} mois`)
+        const okMsg = isAggregated
+          ? `✓ Total mois (agrégé) · ${filteredMonths.length} mois`
+          : `✓ ${filtered.length} lignes · ${filteredMonths.length} mois`
+        updateResult(fi, 'done', okMsg)
 
       } catch (err) {
         updateResult(fi, 'error', 'Erreur : ' + (err.message || 'inconnue'))
@@ -189,7 +206,6 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
           {!busy && <button className="xb" onClick={onClose}>✕</button>}
         </div>
 
-        {/* DROP ZONE */}
         {!globalStatus && (
           <div
             className={`drop-zone ${dragging ? 'dz-drag' : ''}`}
@@ -203,7 +219,7 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
             <div className="dz-icon">📂</div>
             <div className="dz-text">
               {isWarner
-                ? <><strong>Glisse les fichiers Warner ici</strong><br />.txt (données complètes) ou .pdf (données agrégées par titre)<br />Tu peux en sélectionner plusieurs à la fois</>
+                ? <><strong>Glisse les fichiers Warner ici</strong><br />.txt (détail complet) ou .pdf (détail par titre, sinon total mois agrégé)<br />Tu peux en sélectionner plusieurs à la fois</>
                 : <><strong>Glisse le CSV {label} ici</strong><br />ou clique pour choisir</>
               }
             </div>
@@ -217,7 +233,6 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
           </div>
         )}
 
-        {/* FILE LIST */}
         {hasFiles && globalStatus !== null && (
           <div className="file-list">
             {results.map((r, i) => (
@@ -232,20 +247,18 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
           </div>
         )}
 
-        {/* PENDING FILE LIST (before import) */}
         {hasFiles && globalStatus === null && (
           <div className="file-list">
             {files.map((f, i) => (
               <div key={i} className="file-row fr-pending">
                 <div className="fr-icon">○</div>
                 <div className="fr-name">{f.name.length > 36 ? f.name.slice(0, 33) + '…' : f.name}</div>
-                <div className="fr-msg">{isWarner ? '.txt Warner' : `.csv ${label}`}</div>
+                <div className="fr-msg">{isWarner ? (f.name.toLowerCase().endsWith('.pdf') ? '.pdf Warner' : '.txt Warner') : `.csv ${label}`}</div>
               </div>
             ))}
           </div>
         )}
 
-        {/* PROGRESS */}
         {globalStatus === 'running' && (
           <div className="prog-wrap">
             <div className="prog-bar"><div className="prog-fill" style={{ width: `${progress}%` }} /></div>
@@ -253,7 +266,6 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
           </div>
         )}
 
-        {/* SUMMARY */}
         {globalStatus === 'done' && (
           <div className="summary ok">
             ✓ {results.filter(r => r.status === 'done').length} fichier{results.filter(r => r.status === 'done').length > 1 ? 's' : ''} importé{results.filter(r => r.status === 'done').length > 1 ? 's' : ''} avec succès
@@ -266,7 +278,6 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
           </div>
         )}
 
-        {/* FOOTER */}
         <div className="mf">
           {!busy && globalStatus !== 'done' && (
             <button className="btn-cancel" onClick={onClose}>Annuler</button>
