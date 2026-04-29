@@ -1,8 +1,34 @@
 import { useState, useRef, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { parseDistroKid, parseWarner, parseTuneCore } from '../lib/csvParser'
+import { parseDistroKid, parseWarner, parseTuneCore, parseWarnerPDF } from '../lib/csvParser'
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+async function extractPDFText(arrayBuffer) {
+  // Load PDF.js dynamically
+  if (!window.pdfjsLib) {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script')
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
+      script.onload = resolve
+      script.onerror = reject
+      document.head.appendChild(script)
+    })
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+  }
+
+  const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise
+  let fullText = ''
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i)
+    const content = await page.getTextContent()
+    const pageText = content.items.map(item => item.str).join(' ')
+    fullText += pageText + '\n'
+  }
+  return fullText
+}
+
 
 export default function ImportModal({ artist, source = 'distrokid', onClose, onSuccess }) {
   const [dragging, setDragging] = useState(false)
@@ -16,7 +42,7 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
   const isWarner = source === 'warner'
   const isTuneCore = source === 'tunecore'
   const label = isWarner ? 'Warner' : isTuneCore ? 'TuneCore' : 'DistroKid'
-  const accept = isWarner ? '.txt,.csv' : '.csv'
+  const accept = isWarner ? '.txt,.pdf,.csv' : '.csv'
 
   useEffect(() => {
     supabase.from('settings').select('value').eq('key', 'eur_rate').single()
@@ -44,11 +70,24 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
       updateResult(fi, 'running', 'Lecture…')
 
       try {
-        const text = await file.text()
+        const isPDF = file.name.toLowerCase().endsWith('.pdf')
         let parsed
-        if (isWarner) parsed = parseWarner(text, eurRate)
-        else if (isTuneCore) parsed = parseTuneCore(text)
-        else parsed = parseDistroKid(text)
+
+        if (isWarner && isPDF) {
+          // Extract text from PDF using PDF.js
+          const arrayBuffer = await file.arrayBuffer()
+          const pdfText = await extractPDFText(arrayBuffer)
+          parsed = parseWarnerPDF(pdfText, eurRate)
+        } else if (isWarner) {
+          const text = await file.text()
+          parsed = parseWarner(text, eurRate)
+        } else if (isTuneCore) {
+          const text = await file.text()
+          parsed = parseTuneCore(text)
+        } else {
+          const text = await file.text()
+          parsed = parseDistroKid(text)
+        }
 
         const { rows, months } = parsed
 
@@ -164,7 +203,7 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
             <div className="dz-icon">📂</div>
             <div className="dz-text">
               {isWarner
-                ? <><strong>Glisse les fichiers .txt Warner ici</strong><br />Tu peux en sélectionner plusieurs à la fois (2 ans = 24 fichiers)</>
+                ? <><strong>Glisse les fichiers Warner ici</strong><br />.txt (données complètes) ou .pdf (données agrégées par titre)<br />Tu peux en sélectionner plusieurs à la fois</>
                 : <><strong>Glisse le CSV {label} ici</strong><br />ou clique pour choisir</>
               }
             </div>
@@ -240,7 +279,7 @@ export default function ImportModal({ artist, source = 'distrokid', onClose, onS
           )}
           {!hasFiles && (
             <button className="btn-import" onClick={() => inputRef.current?.click()}>
-              Choisir {isWarner ? 'les fichiers' : 'un fichier'}
+              Choisir {isWarner ? 'les fichiers (.txt ou .pdf)' : 'un fichier'}
             </button>
           )}
         </div>
