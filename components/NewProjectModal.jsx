@@ -29,6 +29,7 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
   // Budget per title: { [title]: { lines:[{label,amount}], releaseDate } }
   const [budgets, setBudgets] = useState({})
   const [importMsg, setImportMsg] = useState({}) // { [title]: { ok, text } }
+  const [importedFile, setImportedFile] = useState({}) // { [title]: filename }
 
   // Contract
   const [existingSeries, setExistingSeries] = useState([])
@@ -96,6 +97,7 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
   async function handleImport(file, title) {
     if (!file) return
     setImportMsg(p => ({ ...p, [title]: { ok: null, text: 'Lecture en cours…' } }))
+    setImportedFile(p => ({ ...p, [title]: file.name }))
     try {
       const XLSX = (await import('xlsx')).default || await import('xlsx')
       const buf = await file.arrayBuffer()
@@ -139,6 +141,12 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
     } catch (e) {
       setImportMsg(p => ({ ...p, [title]: { ok: false, text: 'Erreur de lecture : ' + e.message } }))
     }
+  }
+
+  function clearImport(title) {
+    setL(title, [])
+    setImportMsg(p => ({ ...p, [title]: null }))
+    setImportedFile(p => ({ ...p, [title]: null }))
   }
 
   async function handleSave() {
@@ -276,12 +284,20 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
                     </div>
 
                     {/* IMPORT ZONE */}
-                    <label className="import-zone">
-                      <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}}
-                        onChange={e=>{ if(e.target.files[0]) handleImport(e.target.files[0], title) }}/>
-                      <span className="iz-icon">📂</span>
-                      <span className="iz-text">Glisse ou clique — Excel (.xlsx) ou CSV</span>
-                    </label>
+                    {importedFile[title] ? (
+                      <div className="import-done">
+                        <span className="iz-icon">📄</span>
+                        <span className="iz-fname">{importedFile[title]}</span>
+                        <button className="clear-file" onClick={()=>clearImport(title)} title="Supprimer le fichier">✕</button>
+                      </div>
+                    ) : (
+                      <label className="import-zone">
+                        <input type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}}
+                          onChange={e=>{ if(e.target.files[0]) handleImport(e.target.files[0], title) }}/>
+                        <span className="iz-icon">📂</span>
+                        <span className="iz-text">Glisse ou clique — Excel (.xlsx) ou CSV</span>
+                      </label>
+                    )}
 
                     {msg && (
                       <div className={`msg ${msg.ok===true?'ok':msg.ok===false?'err':'info'}`}>{msg.text}</div>
@@ -412,6 +428,10 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
         .bb-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
         .bb-title{font-size:14px;font-weight:700;color:#eee;flex:1}
         .rd-input{width:130px!important;font-size:12px!important;padding:6px 10px!important;flex-shrink:0}
+        .import-done{display:flex;align-items:center;gap:10px;background:#0a1a0a;border:1px solid #6ee7b744;border-radius:8px;padding:12px 16px;margin-bottom:10px}
+        .iz-fname{flex:1;font-size:12px;color:#6ee7b7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .clear-file{background:none;border:1px solid #2a2a2a;border-radius:4px;color:#555;font-size:12px;padding:3px 8px;cursor:pointer;flex-shrink:0;font-family:inherit;transition:all .2s}
+        .clear-file:hover{background:#1a0808;color:#f87171;border-color:#f8717144}
         .import-zone{display:flex;align-items:center;gap:10px;border:1.5px dashed #2a2a2a;border-radius:8px;padding:14px 16px;cursor:pointer;margin-bottom:10px;transition:all .2s}
         .import-zone:hover{border-color:#444;background:#111}
         .iz-icon{font-size:20px;flex-shrink:0}
