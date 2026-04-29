@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { ARTISTS, COLORS, fmt } from '../../lib/artists'
 import MainNav from '../../components/MainNav'
 import NewProjectModal from '../../components/NewProjectModal'
+import EditProjectModal from '../../components/EditProjectModal'
 
 const RATE_DEFAULT = 0.92
 
@@ -15,6 +16,8 @@ export default function RecoupeIndex() {
   const [rate, setRate] = useState(RATE_DEFAULT)
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [editSerie, setEditSerie] = useState(null)
+  const [availableTitles, setAvailableTitles] = useState([])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -23,7 +26,10 @@ export default function RecoupeIndex() {
     supabase.from('settings').select('value').eq('key', 'eur_rate').single()
       .then(({ data }) => { if (data) setRate(parseFloat(data.value)) })
     fetchAll()
+    fetchAvailableTitles()
   }, [])
+
+  useEffect(() => { fetchAvailableTitles() }, [activeArtist])
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
@@ -45,13 +51,23 @@ export default function RecoupeIndex() {
     setLoading(false)
   }, [])
 
-  async function deleteSerie(e, serieId, serieName) {
+  async function deleteSerie(e, serieId, serieName, singlesCount) {
     e.stopPropagation()
-    if (!confirm(`Supprimer "${serieName}" ?
+    const msg = `Supprimer le projet "${serieName}" ?
 
-Cette action supprimera aussi tous les singles et budgets associés.`)) return
+⚠️ Cette action est irréversible et supprimera :
+• ${singlesCount} single${singlesCount > 1 ? 's' : ''}
+• Toutes les lignes de budget associées
+
+Taper OK pour confirmer.`
+    if (!confirm(msg)) return
     await supabase.from('series').delete().eq('id', serieId)
     fetchAll()
+  }
+
+  async function fetchAvailableTitles() {
+    const { data } = await supabase.from('royalties').select('title').eq('artist', activeArtist).limit(1)
+    setAvailableTitles(data || [])
   }
 
   function getSeriesStats(serie) {
@@ -114,9 +130,18 @@ Cette action supprimera aussi tous les singles et budgets associés.`)) return
 
             {artistSeries.length === 0 ? (
               <div className="empty-state">
-                <div className="empty-icon">📊</div>
-                <div className="empty-title">Aucun projet</div>
-                <div className="empty-sub">Crée un projet pour suivre la recoupe de {activeArtist}</div>
+                <div className="empty-icon">{activeArtist === 'Sherfflazone' ? '🎵' : '📊'}</div>
+                <div className="empty-title">
+                  {activeArtist === 'Sherfflazone' ? 'Distribution Warner' : 'Aucun projet'}
+                </div>
+                <div className="empty-sub">
+                  {activeArtist === 'Sherfflazone'
+                    ? 'Les données Sherfflazone sont distribuées via Warner. Importe le rapport Warner dans Suivi & Stats pour débloquer cet espace.'
+                    : availableTitles.length === 0
+                      ? `Importe d'abord un CSV dans Suivi & Stats pour ${activeArtist} avant de créer un projet de recoupe.`
+                      : `Crée un projet pour suivre la recoupe de ${activeArtist}`
+                  }
+                </div>
               </div>
             ) : (
               artistSeries.map(serie => {
@@ -184,8 +209,11 @@ Cette action supprimera aussi tous les singles et budgets associés.`)) return
                       )}
                     </div>
                     <div className="pc-footer">
-                      <button className="del-btn" onClick={e => deleteSerie(e, serie.id, serie.name)}>
-                        🗑 Supprimer le projet
+                      <button className="edit-btn" onClick={e => { e.stopPropagation(); setEditSerie(serie) }}>
+                        ✏️ Modifier
+                      </button>
+                      <button className="del-btn" onClick={e => deleteSerie(e, serie.id, serie.name, serie.singles?.length || 0)}>
+                        🗑 Supprimer
                       </button>
                     </div>
                   </div>
@@ -199,6 +227,14 @@ Cette action supprimera aussi tous les singles et budgets associés.`)) return
           </>
         )}
       </div>
+
+      {editSerie && (
+        <EditProjectModal
+          serie={editSerie}
+          onClose={() => setEditSerie(null)}
+          onSuccess={fetchAll}
+        />
+      )}
 
       {showModal && (
         <NewProjectModal
@@ -254,6 +290,8 @@ Cette action supprimera aussi tous les singles et budgets associés.`)) return
         .pos { color: #6ee7b7 !important; }
         .warn { color: #f59e0b !important; }
         .pc-footer { display: flex; justify-content: flex-end; padding-top: 12px; border-top: 1px solid #1a1a1a; margin-top: 4px; }
+        .edit-btn { background:none; border:1px solid #1e2a1e; color:#4a7a4a; font-size:11px; padding:5px 12px; border-radius:5px; cursor:pointer; font-family:inherit; transition:all .2s; margin-right:8px; }
+        .edit-btn:hover { background:#0a1a0a; color:#6ee7b7; border-color:#6ee7b744; }
         .del-btn { background: none; border: 1px solid #2a1010; color: #664; font-size: 11px; padding: 5px 12px; border-radius: 5px; cursor: pointer; font-family: inherit; transition: all .2s; }
         .del-btn:hover { background: #1a0808; color: #f87171; border-color: #f8717144; }
         .new-project-btn {
