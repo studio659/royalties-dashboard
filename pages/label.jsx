@@ -5,6 +5,7 @@ import {
   XAxis, YAxis, Tooltip, PieChart, Pie, Cell, AreaChart, Area, Legend
 } from 'recharts'
 import { supabase } from '../lib/supabase'
+import { useRate } from '../lib/rateContext'
 import { ARTISTS, COLORS, PLAT_COLORS, fmtEur, fmtStreams, deltaStr } from '../lib/artists'
 import MainNav from '../components/MainNav'
 
@@ -42,11 +43,12 @@ const TABS = ['Revenus','Streams','Artistes','Titres','Plateformes']
 
 export default function LabelPage() {
   const router = useRouter()
+  const { rate: eurRate } = useRate()
   const [rows, setRows] = useState([])
+  const [allArtists, setAllArtists] = useState(ARTISTS)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('Revenus')
   const [yearFilter, setYearFilter] = useState('Tout')
-  const [eurRate, setEurRate] = useState(0.92)
 
   useEffect(()=>{
     supabase.auth.getSession().then(({data})=>{if(!data.session)router.replace('/login')})
@@ -55,9 +57,10 @@ export default function LabelPage() {
 
   async function fetchData() {
     setLoading(true)
-    const {data:rateSetting} = await supabase.from('settings').select('value').eq('key','eur_rate').single()
-    const rate = rateSetting ? parseFloat(rateSetting.value) : 0.92
-    setEurRate(rate)
+
+    // Charge la liste dynamique des artistes depuis la DB
+    const { data: artistsData } = await supabase.from('artists').select('name, color').order('created_at')
+    if (artistsData?.length) setAllArtists(artistsData.map(a => a.name))
 
     let all=[], from=0
     while(true){
@@ -94,7 +97,7 @@ export default function LabelPage() {
     const ms=[...new Set(filtered.map(r=>r.month))].sort()
     return ms.map(m=>{
       const obj={month:m.slice(2)}
-      ARTISTS.forEach(a=>{ obj[a]=Math.round(filtered.filter(r=>r.month===m&&r.artist===a).reduce((s,r)=>s+eur(r),0)) })
+      allArtists.forEach(a=>{ obj[a]=Math.round(filtered.filter(r=>r.month===m&&r.artist===a).reduce((s,r)=>s+eur(r),0)) })
       obj['Total']=Math.round(filtered.filter(r=>r.month===m).reduce((s,r)=>s+eur(r),0))
       return obj
     })
@@ -104,13 +107,13 @@ export default function LabelPage() {
     const ms=[...new Set(filtered.map(r=>r.month))].sort()
     return ms.map(m=>{
       const obj={month:m.slice(2)}
-      ARTISTS.forEach(a=>{ obj[a]=filtered.filter(r=>r.month===m&&r.artist===a).reduce((s,r)=>s+Number(r.qty||0),0) })
+      allArtists.forEach(a=>{ obj[a]=filtered.filter(r=>r.month===m&&r.artist===a).reduce((s,r)=>s+Number(r.qty||0),0) })
       obj['Total']=filtered.filter(r=>r.month===m).reduce((s,r)=>s+Number(r.qty||0),0)
       return obj
     })
   },[filtered])
 
-  const byArtist = useMemo(()=>ARTISTS.map(a=>({
+  const byArtist = useMemo(()=>allArtists.map(a=>({
     artist:a,
     eur:filtered.filter(r=>r.artist===a).reduce((s,r)=>s+eur(r),0),
     qty:filtered.filter(r=>r.artist===a).reduce((s,r)=>s+Number(r.qty||0),0),
@@ -184,7 +187,7 @@ export default function LabelPage() {
                   <Tooltip contentStyle={{background:'#1a1a1a',border:'1px solid #222',borderRadius:6,fontSize:12}}
                     formatter={(v,n)=>[fmtEur(v),n]} labelStyle={{color:'#888'}}/>
                   <Legend wrapperStyle={{fontSize:11,color:'#666'}}/>
-                  {ARTISTS.map(a=>(
+                  {allArtists.map(a=>(
                     <Line key={a} type="monotone" dataKey={a} stroke={COLORS[a]} strokeWidth={2}
                       dot={{r:2}} activeDot={{r:4}} connectNulls/>
                   ))}
@@ -214,7 +217,7 @@ export default function LabelPage() {
                   <Tooltip contentStyle={{background:'#1a1a1a',border:'1px solid #222',borderRadius:6,fontSize:12}}
                     formatter={(v,n)=>[fmtStreams(v),n]} labelStyle={{color:'#888'}}/>
                   <Legend wrapperStyle={{fontSize:11,color:'#666'}}/>
-                  {ARTISTS.map(a=><Bar key={a} dataKey={a} stackId="a" fill={COLORS[a]}/>)}
+                  {allArtists.map(a=><Bar key={a} dataKey={a} stackId="a" fill={COLORS[a]}/>)}
                 </BarChart>
               </ResponsiveContainer>
             </div>
