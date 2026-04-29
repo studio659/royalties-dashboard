@@ -69,7 +69,14 @@ Cette action supprimera aussi tous les singles et budgets associés.`)) return
     const budgetUsd = totalBudgetEur / rate
     const pct = budgetUsd > 0 ? Math.min((totalUsd / budgetUsd) * 100, 100) : 0
     const remaining = Math.max(budgetUsd - totalUsd, 0)
-    return { totalBudgetEur, totalUsd, totalQty, budgetUsd, pct, remaining }
+    const profit = Math.max(totalUsd - budgetUsd, 0)
+    // Profit distribution (post-recoupe)
+    const artistShare = profit * (serie.artist_rate / 100)
+    const mgmtShare   = profit * (serie.mgmt_rate / 100)
+    const poolShare   = profit - artistShare - mgmtShare
+    const coprodShare = poolShare * (serie.coprod_rate / 100)
+    const labelShare  = poolShare * (serie.label_rate / 100)
+    return { totalBudgetEur, totalUsd, totalQty, budgetUsd, pct, remaining, profit, artistShare, coprodShare, labelShare, mgmtShare }
   }
 
   const artistSeries = series.filter(s => s.artist === activeArtist)
@@ -161,11 +168,25 @@ Cette action supprimera aussi tous les singles et budgets associés.`)) return
                         <div className="pcs-val pos">{fmt(s.totalUsd)}</div>
                         <div className="pcs-sub">{s.totalQty >= 1000 ? (s.totalQty / 1000).toFixed(0) + 'K' : s.totalQty} streams</div>
                       </div>
-                      <div>
-                        <div className="pcs-label">Reste à recouper</div>
-                        <div className="pcs-val warn">{fmt(s.remaining)}</div>
-                        {serie.coprod_name && <div className="pcs-sub">{serie.coprod_name} : $0 perçu</div>}
-                      </div>
+                      {s.pct >= 100 ? (
+                        <div>
+                          <div className="pcs-label">Bénéfice net</div>
+                          <div className="pcs-val" style={{color:'#6ee7b7'}}>{fmt(s.profit)}</div>
+                          {serie.coprod_name && <div className="pcs-sub" style={{color:'#eab308'}}>{serie.coprod_name} : {fmt(s.coprodShare)}</div>}
+                          <div className="pcs-sub" style={{color:'#f97316'}}>Avlanche : {fmt(s.labelShare + s.mgmtShare)}</div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="pcs-label">Reste à recouper</div>
+                          <div className="pcs-val warn">{fmt(s.remaining)}</div>
+                          {serie.coprod_name && <div className="pcs-sub">{serie.coprod_name} : $0 perçu</div>}
+                        </div>
+                      )}
+                    </div>
+                    <div className="pc-footer">
+                      <button className="del-btn" onClick={e => deleteSerie(e, serie.id, serie.name)}>
+                        🗑 Supprimer le projet
+                      </button>
                     </div>
                   </div>
                 )
