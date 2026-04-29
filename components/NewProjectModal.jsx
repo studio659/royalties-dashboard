@@ -1,8 +1,8 @@
+import * as XLSX from 'xlsx'
+
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { ARTISTS, COLORS } from '../lib/artists'
-import * as XLSX from 'xlsx'
-
 const PROJECT_TYPES = [
   { value: 'single', label: 'Single' },
   { value: 'serie', label: 'Série de singles' },
@@ -87,21 +87,21 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
       const lines = []
       for (const row of rows) {
         const label = String(row[0] || '').trim()
-        const amount = parseFloat(String(row[1] || '').replace(',', '.'))
-        const status = String(row[2] || '').toLowerCase().includes('payé') ? 'paid' : 'pending'
+        const amount = parseFloat(String(row[1] || '').replace(',', '.').replace(/[^0-9.]/g, ''))
+        const status = String(row[2] || '').toLowerCase().includes('pay') ? 'paid' : 'pending'
         if (label && !isNaN(amount) && amount > 0) {
           lines.push({ label, amount: String(amount), status })
         }
       }
 
-      if (!lines.length) { setBudgetFileError('Aucune ligne valide trouvée. Format attendu : Poste | Montant € | payé/en attente'); return }
+      if (!lines.length) { setBudgetFileError('Aucune ligne valide. Format : colonne A = Poste, B = Montant €, C = payé/en attente'); return }
 
       const updated = [...singles]
       updated[singleIndex].lines = lines
       setSingles(updated)
       setBudgetFile(file)
     } catch (e) {
-      setBudgetFileError('Erreur de lecture du fichier : ' + e.message)
+      setBudgetFileError('Erreur : ' + e.message)
     }
   }
 
@@ -338,14 +338,14 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
                     <div className="bs-header">
                       <span className="bs-label">Budget</span>
                       <button className="upload-budget-btn" onClick={()=>document.getElementById(`budget-${si}`).click()}>
-                        ↑ Importer depuis Excel/CSV
+                        ↑ Importer depuis Excel / CSV
                       </button>
                       <input id={`budget-${si}`} type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}}
                         onChange={e=>parseBudgetFile(e.target.files[0],si)}/>
                     </div>
                     {budgetFileError && <div className="error-msg">{budgetFileError}</div>}
                     <div className="hint-box" style={{marginBottom:10}}>
-                      Format Excel : colonne A = Poste, B = Montant €, C = payé / en attente
+                      Format : colonne A = Poste, B = Montant €, C = payé / en attente
                     </div>
 
                     {(s.lines||[]).map((line,li)=>(
