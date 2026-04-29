@@ -1,21 +1,22 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/router'
 import { supabase } from '../../lib/supabase'
+import { useRate } from '../../lib/rateContext'
 import { ARTISTS, COLORS, fmt, fmtStreams } from '../../lib/artists'
 import MainNav from '../../components/MainNav'
 import NewProjectModal from '../../components/NewProjectModal'
 import EditProjectModal from '../../components/EditProjectModal'
 
-const RATE_DEFAULT = 0.92
 const ALL_ARTISTS = [...ARTISTS, 'Sherfflazone']
 
 export default function RecoupeIndex() {
   const router = useRouter()
+  const { rate } = useRate()  // ← useRate() au lieu de fetch individuel
   const [view, setView] = useState('dashboard')
   const [activeArtist, setActiveArtist] = useState(null)
   const [series, setSeries] = useState([])
   const [royalties, setRoyalties] = useState([])
-  const [rate, setRate] = useState(RATE_DEFAULT)
+  const [allArtists, setAllArtists] = useState(ALL_ARTISTS)
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editSerie, setEditSerie] = useState(null)
@@ -24,23 +25,42 @@ export default function RecoupeIndex() {
     supabase.auth.getSession().then(({ data }) => {
       if (!data.session) router.replace('/login')
     })
-    supabase.from('settings').select('value').eq('key', 'eur_rate').single()
-      .then(({ data }) => { if (data) setRate(parseFloat(data.value)) })
     fetchAll()
   }, [])
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
-    const { data: s } = await supabase.from('series').select('*, singles(*, budget_lines(*))').order('created_at')
+
+    // Fetch series + artists en parallèle
+    const [{ data: s }, { data: artistsData }] = await Promise.all([
+      supabase.from('series').select('*, singles(*, budget_lines(*))').order('created_at'),
+      supabase.from('artists').select('name, color').order('created_at'),
+    ])
+
+    const seriesData = s || []
+    setSeries(seriesData)
+
+    // Artistes dynamiques depuis la DB
+    if (artistsData?.length) {
+      setAllArtists(artistsData.map(a => a.name))
+    }
+
+    // Fetch royalties filtrées aux artistes qui ont des projets (perf)
+    const artistsWithProjects = [...new Set(seriesData.map(s => s.artist))]
+    if (!artistsWithProjects.length) { setRoyalties([]); setLoading(false); return }
+
     let allRoy = [], from = 0
     while (true) {
-      const { data, error } = await supabase.from('royalties').select('title, artist, usd, qty, month').range(from, from + 999)
+      const { data, error } = await supabase
+        .from('royalties')
+        .select('title, artist, amount, currency, qty, month')
+        .in('artist', artistsWithProjects)  // ← filtre par artiste, pas tout charger
+        .range(from, from + 999)
       if (error || !data || !data.length) break
       allRoy = allRoy.concat(data)
       if (data.length < 1000) break
       from += 1000
     }
-    setSeries(s || [])
     setRoyalties(allRoy)
     setLoading(false)
   }, [])
@@ -52,24 +72,32 @@ export default function RecoupeIndex() {
     fetchAll()
   }
 
+  // Convertit un montant de royalties en USD pour la comparaison avec le budget (toujours en USD)
+  function royToUsd(r) {
+    const a = Number(r.amount ?? r.usd ?? 0)
+    if (r.currency === 'EUR') return a / rate
+    return a
+  }
+
   function getSerieStats(serie) {
     const singles = serie.singles || []
     let totalBudgetEur = 0, totalUsd = 0, totalQty = 0
     singles.forEach(s => {
       totalBudgetEur += s.budget_eur || 0
-      const rows = royalties.filter(r => r.artist === s.artist && r.title.toLowerCase() === s.title.toLowerCase())
-      totalUsd += rows.reduce((sum, r) => sum + r.usd, 0)
-      totalQty += rows.reduce((sum, r) => sum + r.qty, 0)
+      const rows = royalties.filter(r =>
+        r.artist === s.artist &&
+        r.title.toLowerCase() === s.title.toLowerCase()
+      )
+      totalUsd += rows.reduce((sum, r) => sum + royToUsd(r), 0)
+      totalQty += rows.reduce((sum, r) => sum + Number(r.qty || 0), 0)
     })
     const budgetUsd = totalBudgetEur / rate
     const pct = budgetUsd > 0 ? Math.min((totalUsd / budgetUsd) * 100, 100) : 0
     const remaining = Math.max(budgetUsd - totalUsd, 0)
     const profit = Math.max(totalUsd - budgetUsd, 0)
-    const artistShare = profit * (serie.artist_rate / 100)
-    const mgmtShare   = profit * (serie.mgmt_rate / 100)
-    const poolShare   = profit - artistShare - mgmtShare
-    const coprodShare = poolShare * (serie.coprod_rate / 100)
-    const labelShare  = poolShare * (serie.label_rate / 100)
+    const afterArtistMgmt = profit * ((100 - serie.artist_rate - serie.mgmt_rate) / 100)
+    const coprodShare = afterArtistMgmt * (serie.coprod_rate / 100)
+    const labelShare  = afterArtistMgmt * (serie.label_rate / 100)
     return { totalBudgetEur, totalUsd, totalQty, budgetUsd, pct, remaining, profit, coprodShare, labelShare }
   }
 
@@ -103,8 +131,8 @@ export default function RecoupeIndex() {
 
   function pctColor(pct) {
     if (pct >= 100) return '#6ee7b7'
-    if (pct >= 60) return '#f59e0b'
-    if (pct > 0) return '#f87171'
+    if (pct >= 60)  return '#f59e0b'
+    if (pct > 0)    return '#f87171'
     return '#444'
   }
 
@@ -125,7 +153,6 @@ export default function RecoupeIndex() {
           </div>
         ) : view === 'dashboard' ? (
           <>
-            {/* LABEL CARD */}
             <div className="label-card">
               <div className="lc-top">
                 <div className="lc-left">
@@ -165,13 +192,10 @@ export default function RecoupeIndex() {
               )}
             </div>
 
-            {/* ARTIST GRID */}
             <div className="artist-grid">
-              {ALL_ARTISTS.map(artist => {
+              {allArtists.map(artist => {
                 const s = getArtistStats(artist)
                 const color = COLORS[artist] || '#888'
-                const isWarner = artist === 'Sherfflazone'
-
                 return (
                   <div key={artist} className="artist-card" onClick={() => { setActiveArtist(artist); setView('artist') }}>
                     <div className="ac-top">
@@ -180,7 +204,7 @@ export default function RecoupeIndex() {
                         <div>
                           <div className="ac-name">{artist}</div>
                           <div className="ac-meta">
-                            {isWarner ? 'Distribution Warner' : s.seriesCount > 0 ? `${s.seriesCount} projet${s.seriesCount > 1 ? 's' : ''}` : 'Aucun projet'}
+                            {s.seriesCount > 0 ? `${s.seriesCount} projet${s.seriesCount > 1 ? 's' : ''}` : 'Aucun projet'}
                           </div>
                         </div>
                       </div>
@@ -217,9 +241,7 @@ export default function RecoupeIndex() {
                       </>
                     )}
                     {s.seriesCount === 0 && (
-                      <div className="ac-empty">
-                        {isWarner ? 'Importer un rapport Warner pour activer' : 'Cliquer pour créer un projet →'}
-                      </div>
+                      <div className="ac-empty">Cliquer pour créer un projet →</div>
                     )}
                   </div>
                 )
@@ -231,7 +253,6 @@ export default function RecoupeIndex() {
             </button>
           </>
         ) : (
-          /* ARTIST VIEW */
           <>
             <div className="breadcrumb">
               <span className="bc-link" onClick={() => setView('dashboard')}>Recoupe</span>
@@ -264,9 +285,9 @@ export default function RecoupeIndex() {
 
             {artistSeries.length === 0 ? (
               <div className="empty-state">
-                <div className="empty-icon">{activeArtist === 'Sherfflazone' ? '🎵' : '📊'}</div>
-                <div className="empty-title">{activeArtist === 'Sherfflazone' ? 'Distribution Warner' : 'Aucun projet'}</div>
-                <div className="empty-sub">{activeArtist === 'Sherfflazone' ? 'Importe un rapport Warner dans Suivi & Stats.' : `Crée un premier projet pour ${activeArtist}`}</div>
+                <div className="empty-icon">📊</div>
+                <div className="empty-title">Aucun projet</div>
+                <div className="empty-sub">Crée un premier projet pour {activeArtist}</div>
               </div>
             ) : artistSeries.map(serie => {
               const s = getSerieStats(serie)
@@ -318,59 +339,60 @@ export default function RecoupeIndex() {
       {showModal && <NewProjectModal defaultArtist={activeArtist || 'Magie!'} onClose={() => setShowModal(false)} onSuccess={fetchAll} />}
 
       <style jsx>{`
-        .breadcrumb { font-size:11px; color:#444; margin-bottom:20px; display:flex; align-items:center; gap:6px; }
-        .bc-link { color:#555; cursor:pointer; } .bc-link:hover { color:#aaa; }
-        .bc-sep { color:#333; } .bc-current { color:#888; display:flex; align-items:center; }
-        .label-card { background:#141414; border:1px solid #1e1e1e; border-radius:12px; padding:18px 20px; margin-bottom:16px; cursor:pointer; transition:border-color .2s; }
-        .label-card:hover { border-color:#2a2a2a; }
-        .lc-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
-        .lc-left { display:flex; align-items:center; gap:10px; font-size:15px; font-weight:700; color:#eee; }
-        .lc-dot { width:8px; height:8px; border-radius:50%; background:linear-gradient(135deg,#f97316,#a78bfa); flex-shrink:0; }
-        .lc-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
-        .sl { font-size:10px; color:#444; text-transform:uppercase; letter-spacing:1.2px; margin-bottom:4px; }
-        .sv { font-size:16px; font-weight:700; color:#eee; }
-        .ss { font-size:11px; color:#555; margin-top:2px; }
-        .prog-bg { height:5px; background:#1e1e1e; border-radius:3px; overflow:hidden; }
-        .prog-fill { height:100%; border-radius:3px; }
-        .artist-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
-        .artist-card { background:#141414; border:1px solid #1e1e1e; border-radius:12px; padding:16px 18px; cursor:pointer; transition:border-color .2s,background .2s; }
-        .artist-card:hover { border-color:#2a2a2a; background:#161616; }
-        .ac-top { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:12px; }
-        .ac-left { display:flex; align-items:flex-start; gap:9px; }
-        .ac-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; margin-top:3px; }
-        .ac-name { font-size:15px; font-weight:700; color:#eee; margin-bottom:2px; }
-        .ac-meta { font-size:11px; color:#555; }
-        .ac-right { text-align:right; flex-shrink:0; }
-        .ac-pct { font-size:22px; font-weight:800; line-height:1; }
-        .ac-pct-sub { font-size:10px; color:#555; margin-top:2px; }
-        .ac-stats { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
-        .ac-empty { font-size:11px; color:#333; margin-top:10px; padding-top:10px; border-top:1px solid #1a1a1a; }
-        .section-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:2px; color:#444; margin-bottom:14px; }
-        .project-card { background:#141414; border:1px solid #1e1e1e; border-radius:12px; padding:20px 22px; margin-bottom:12px; cursor:pointer; transition:border-color .2s,background .2s; }
-        .project-card:hover { border-color:#2a2a2a; background:#161616; }
-        .pc-top { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
-        .pc-type { font-size:10px; color:#555; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:4px; }
-        .pc-name { font-size:16px; font-weight:700; color:#eee; margin-bottom:3px; }
-        .pc-meta { font-size:12px; color:#555; }
-        .pc-right { text-align:right; flex-shrink:0; }
-        .pc-pct { font-size:28px; font-weight:800; line-height:1; }
-        .pc-pct-sub { font-size:11px; color:#555; margin-top:2px; }
-        .pc-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:14px; }
-        .pcs-label { font-size:10px; color:#444; text-transform:uppercase; letter-spacing:1px; margin-bottom:4px; }
-        .pcs-val { font-size:14px; font-weight:700; color:#eee; }
-        .pcs-sub { font-size:10px; color:#555; margin-top:2px; }
-        .pos { color:#6ee7b7 !important; } .warn { color:#f59e0b !important; }
-        .pc-footer { display:flex; justify-content:flex-end; gap:8px; padding-top:12px; border-top:1px solid #1a1a1a; margin-top:14px; }
-        .edit-btn { background:none; border:1px solid #1e2a1e; color:#4a7a4a; font-size:11px; padding:5px 12px; border-radius:5px; cursor:pointer; font-family:inherit; transition:all .2s; }
-        .edit-btn:hover { background:#0a1a0a; color:#6ee7b7; border-color:#6ee7b744; }
-        .del-btn { background:none; border:1px solid #2a1010; color:#664; font-size:11px; padding:5px 12px; border-radius:5px; cursor:pointer; font-family:inherit; transition:all .2s; }
-        .del-btn:hover { background:#1a0808; color:#f87171; border-color:#f8717144; }
-        .new-project-btn { width:100%; padding:18px; background:none; border:1.5px dashed #1e1e1e; border-radius:12px; text-align:center; color:#333; font-size:13px; cursor:pointer; font-family:inherit; transition:all .2s; margin-top:4px; }
-        .new-project-btn:hover { border-color:#333; color:#666; }
-        .empty-state { text-align:center; padding:48px 20px; }
-        .empty-icon { font-size:36px; margin-bottom:12px; }
-        .empty-title { font-size:16px; font-weight:700; color:#555; margin-bottom:6px; }
-        .empty-sub { font-size:13px; color:#333; max-width:340px; margin:0 auto; line-height:1.6; }
+        .breadcrumb{font-size:11px;color:#444;margin-bottom:20px;display:flex;align-items:center;gap:6px}
+        .bc-link{color:#555;cursor:pointer}.bc-link:hover{color:#aaa}
+        .bc-sep{color:#333}.bc-current{color:#888;display:flex;align-items:center}
+        .label-card{background:#141414;border:1px solid #1e1e1e;border-radius:12px;padding:18px 20px;margin-bottom:16px;cursor:pointer;transition:border-color .2s}
+        .label-card:hover{border-color:#2a2a2a}
+        .lc-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+        .lc-left{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:700;color:#eee}
+        .lc-dot{width:8px;height:8px;border-radius:50%;background:linear-gradient(135deg,#f97316,#a78bfa);flex-shrink:0}
+        .lc-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+        .sl{font-size:10px;color:#444;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:4px}
+        .sv{font-size:16px;font-weight:700;color:#eee}
+        .ss{font-size:11px;color:#555;margin-top:2px}
+        .prog-bg{height:5px;background:#1e1e1e;border-radius:3px;overflow:hidden}
+        .prog-fill{height:100%;border-radius:3px}
+        .artist-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+        .artist-card{background:#141414;border:1px solid #1e1e1e;border-radius:12px;padding:16px 18px;cursor:pointer;transition:border-color .2s,background .2s}
+        .artist-card:hover{border-color:#2a2a2a;background:#161616}
+        .ac-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px}
+        .ac-left{display:flex;align-items:flex-start;gap:9px}
+        .ac-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:3px}
+        .ac-name{font-size:15px;font-weight:700;color:#eee;margin-bottom:2px}
+        .ac-meta{font-size:11px;color:#555}
+        .ac-right{text-align:right;flex-shrink:0}
+        .ac-pct{font-size:22px;font-weight:800;line-height:1}
+        .ac-pct-sub{font-size:10px;color:#555;margin-top:2px}
+        .ac-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+        .ac-empty{font-size:11px;color:#333;margin-top:10px;padding-top:10px;border-top:1px solid #1a1a1a}
+        .section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#444;margin-bottom:14px}
+        .project-card{background:#141414;border:1px solid #1e1e1e;border-radius:12px;padding:20px 22px;margin-bottom:12px;cursor:pointer;transition:border-color .2s,background .2s}
+        .project-card:hover{border-color:#2a2a2a;background:#161616}
+        .pc-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
+        .pc-type{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:4px}
+        .pc-name{font-size:16px;font-weight:700;color:#eee;margin-bottom:3px}
+        .pc-meta{font-size:12px;color:#555}
+        .pc-right{text-align:right;flex-shrink:0}
+        .pc-pct{font-size:28px;font-weight:800;line-height:1}
+        .pc-pct-sub{font-size:11px;color:#555;margin-top:2px}
+        .pc-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}
+        .pcs-label{font-size:10px;color:#444;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
+        .pcs-val{font-size:14px;font-weight:700;color:#eee}
+        .pcs-sub{font-size:10px;color:#555;margin-top:2px}
+        .pos{color:#6ee7b7!important}.warn{color:#f59e0b!important}
+        .pc-footer{display:flex;justify-content:flex-end;gap:8px;padding-top:12px;border-top:1px solid #1a1a1a;margin-top:14px}
+        .edit-btn{background:none;border:1px solid #1e2a1e;color:#4a7a4a;font-size:11px;padding:5px 12px;border-radius:5px;cursor:pointer;font-family:inherit;transition:all .2s}
+        .edit-btn:hover{background:#0a1a0a;color:#6ee7b7;border-color:#6ee7b744}
+        .del-btn{background:none;border:1px solid #2a1010;color:#664;font-size:11px;padding:5px 12px;border-radius:5px;cursor:pointer;font-family:inherit;transition:all .2s}
+        .del-btn:hover{background:#1a0808;color:#f87171;border-color:#f8717144}
+        .new-project-btn{width:100%;padding:18px;background:none;border:1.5px dashed #1e1e1e;border-radius:12px;text-align:center;color:#333;font-size:13px;cursor:pointer;font-family:inherit;transition:all .2s;margin-top:4px}
+        .new-project-btn:hover{border-color:#333;color:#666}
+        .empty-state{text-align:center;padding:48px 20px}
+        .empty-icon{font-size:36px;margin-bottom:12px}
+        .empty-title{font-size:16px;font-weight:700;color:#555;margin-bottom:6px}
+        .empty-sub{font-size:13px;color:#333;max-width:340px;margin:0 auto;line-height:1.6}
+        @media(max-width:600px){.lc-stats{grid-template-columns:1fr 1fr}.artist-grid{grid-template-columns:1fr}.pc-stats{grid-template-columns:1fr 1fr}}
       `}</style>
     </div>
   )
