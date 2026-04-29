@@ -98,7 +98,8 @@ export default function SingleDetail() {
   const months = Object.keys(byMonth).sort()
   const last3 = months.slice(-3)
   const avg = last3.length > 0 ? last3.reduce((s, m) => s + byMonth[m], 0) / last3.length : 0
-  const monthsLeft = avg > 0 && remaining > 0 ? Math.ceil(remaining / avg) : null
+  const hasEnoughData = months.length >= 3
+  const monthsLeft = hasEnoughData && avg > 0 && remaining > 0 ? Math.ceil(remaining / avg) : null
 
   // By platform
   const byPlat = {}
@@ -106,6 +107,23 @@ export default function SingleDetail() {
   const topPlats = Object.entries(byPlat).sort((a, b) => b[1] - a[1]).slice(0, 5)
 
   const maxMonthly = Math.max(...Object.values(byMonth), 1)
+
+  function exportCSV() {
+    const rows = [['Mois','Revenus $','Streams','% du budget recoupé']]
+    months.forEach(m => {
+      rows.push([m, (byMonth[m]||0).toFixed(2), byMonth[m] ? '—' : 0, ((byMonth[m]||0)/budgetUsd*100).toFixed(1)])
+    })
+    // Also add budget lines
+    rows.push(['','','',''])
+    rows.push(['BUDGET LIGNES','€','',''])
+    budgetLines.forEach(l => rows.push([l.label, l.amount_eur, '', '']))
+    const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `recoupe_${single.title.replace(/[^a-z0-9]/gi,'_')}.csv`
+    a.click()
+  }
 
   return (
     <div className="app">
@@ -152,7 +170,7 @@ export default function SingleDetail() {
               </div>
               <div className="tc-reste" style={{ color: remaining > 0 ? '#f59e0b' : '#6ee7b7' }}>
                 {remaining > 0
-                  ? `⚡ Il reste ${fmt(remaining)}${monthsLeft ? ` · ~${monthsLeft} mois` : months.length < 3 ? ' · titre récent' : ''}`
+                  ? `⚡ Il reste ${fmt(remaining)}${monthsLeft ? ` · ~${monthsLeft} mois` : !hasEnoughData ? ' · données insuffisantes (<3 mois)' : ''}`
                   : '✓ Recoupé !'}
               </div>
             </div>
