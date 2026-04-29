@@ -5,6 +5,7 @@ import {
   XAxis, YAxis, Tooltip, PieChart, Pie, Cell
 } from 'recharts'
 import { supabase } from '../../lib/supabase'
+import { useRate } from '../../lib/rateContext'
 import { COLORS, PLAT_COLORS, fmtAmount, fmtEur, fmt, fmtStreams, deltaStr, currencySymbol } from '../../lib/artists'
 import MainNav from '../../components/MainNav'
 
@@ -39,6 +40,7 @@ export default function ArtistPage() {
   const { name } = router.query
   const artist = name ? decodeURIComponent(name) : ''
   const color = COLORS[artist] || '#888'
+  const { rate } = useRate()
 
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -68,12 +70,20 @@ export default function ArtistPage() {
     setLoading(false)
   }
 
-  // Devise native de l'artiste (détectée depuis les données)
-  const currency = useMemo(()=>{
-    const counts={}
-    rows.forEach(r=>{ counts[r.currency]=(counts[r.currency]||0)+1 })
-    return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0]?.[0]||'USD'
+  // Détection devise — gère le cas mixte (ex: NoSnow Warner EUR + DistroKid USD)
+  const { isMixed, currency } = useMemo(()=>{
+    const hasEur = rows.some(r => r.currency === 'EUR')
+    const hasUsd = rows.some(r => r.currency === 'USD')
+    const mixed = hasEur && hasUsd
+    return { isMixed: mixed, currency: mixed ? 'EUR' : (rows[0]?.currency || 'USD') }
   },[rows])
+
+  // Convertit une ligne dans la devise d'affichage
+  const amt = r => {
+    const a = Number(r.amount || 0)
+    if (isMixed) return r.currency === 'EUR' ? a : a * rate
+    return a
+  }
 
   const fmtNative = v => fmtAmount(v, currency)
   const sym = currencySymbol(currency)
@@ -85,10 +95,10 @@ export default function ArtistPage() {
   const lastM = months[months.length-1]
   const prevM = months[months.length-2]
 
-  const totalAmt = useMemo(()=>rows.reduce((s,r)=>s+Number(r.amount||0),0),[rows])
+  const totalAmt = useMemo(()=>rows.reduce((s,r)=>s+amt(r),0),[rows,rate])
   const totalQty = useMemo(()=>rows.reduce((s,r)=>s+Number(r.qty||0),0),[rows])
-  const lastAmt  = useMemo(()=>rows.filter(r=>r.month===lastM).reduce((s,r)=>s+Number(r.amount||0),0),[rows,lastM])
-  const prevAmt  = useMemo(()=>rows.filter(r=>r.month===prevM).reduce((s,r)=>s+Number(r.amount||0),0),[rows,prevM])
+  const lastAmt  = useMemo(()=>rows.filter(r=>r.month===lastM).reduce((s,r)=>s+amt(r),0),[rows,lastM,rate])
+  const prevAmt  = useMemo(()=>rows.filter(r=>r.month===prevM).reduce((s,r)=>s+amt(r),0),[rows,prevM,rate])
   const lastQty  = useMemo(()=>rows.filter(r=>r.month===lastM).reduce((s,r)=>s+Number(r.qty||0),0),[rows,lastM])
   const prevQty  = useMemo(()=>rows.filter(r=>r.month===prevM).reduce((s,r)=>s+Number(r.qty||0),0),[rows,prevM])
   const dAmt = deltaStr(lastAmt,prevAmt)
@@ -98,7 +108,7 @@ export default function ArtistPage() {
     const ms=[...new Set(filtered.map(r=>r.month))].sort()
     return ms.map(m=>({
       month:m.slice(2),
-      amt:Math.round(filtered.filter(r=>r.month===m).reduce((s,r)=>s+Number(r.amount||0),0)),
+      amt:Math.round(filtered.filter(r=>r.month===m).reduce((s,r)=>s+amt(r),0)),
       qty:filtered.filter(r=>r.month===m).reduce((s,r)=>s+Number(r.qty||0),0),
     }))
   },[filtered])
@@ -107,29 +117,29 @@ export default function ArtistPage() {
     const m={}
     filtered.forEach(r=>{
       if(!m[r.title])m[r.title]={amt:0,qty:0}
-      m[r.title].amt+=Number(r.amount||0); m[r.title].qty+=Number(r.qty||0)
+      m[r.title].amt+=amt(r); m[r.title].qty+=Number(r.qty||0)
     })
     return Object.entries(m).sort((a,b)=>b[1].amt-a[1].amt)
-  },[filtered])
+  },[filtered,rate])
 
   const byPlat = useMemo(()=>{
     const m={}
     filtered.forEach(r=>{
       if(!m[r.store])m[r.store]={amt:0,qty:0}
-      m[r.store].amt+=Number(r.amount||0); m[r.store].qty+=Number(r.qty||0)
+      m[r.store].amt+=amt(r); m[r.store].qty+=Number(r.qty||0)
     })
     return Object.entries(m).sort((a,b)=>b[1].amt-a[1].amt)
-  },[filtered])
+  },[filtered,rate])
 
   const byCountry = useMemo(()=>{
     const m={}
     filtered.forEach(r=>{
       if(!r.country)return
       if(!m[r.country])m[r.country]={amt:0,qty:0}
-      m[r.country].amt+=Number(r.amount||0); m[r.country].qty+=Number(r.qty||0)
+      m[r.country].amt+=amt(r); m[r.country].qty+=Number(r.qty||0)
     })
     return Object.entries(m).sort((a,b)=>b[1].qty-a[1].qty).slice(0,15)
-  },[filtered])
+  },[filtered,rate])
 
   const maxTitleAmt=Math.max(...byTitle.map(([,v])=>Math.abs(v.amt)),1)
   const maxTitleQty=Math.max(...byTitle.map(([,v])=>v.qty),1)
@@ -194,12 +204,12 @@ export default function ArtistPage() {
             <div className="yearly-breakdown">
               {years.map(y=>{
                 const yr=rows.filter(r=>r.month.startsWith(y))
-                const amt=yr.reduce((s,r)=>s+Number(r.amount||0),0)
+                const yearAmt=yr.reduce((s,r)=>s+amt(r),0)
                 const qty=yr.reduce((s,r)=>s+Number(r.qty||0),0)
                 return (
                   <div key={y} className="year-row">
                     <span className="year-label">{y}</span>
-                    <span className="year-usd" style={{color}}>{fmtNative(amt)}</span>
+                    <span className="year-usd" style={{color}}>{fmtNative(yearAmt)}</span>
                     <span className="year-qty">{fmtStreams(qty)} streams</span>
                   </div>
                 )
@@ -226,12 +236,12 @@ export default function ArtistPage() {
               {years.map(y=>{
                 const yr=rows.filter(r=>r.month.startsWith(y))
                 const qty=yr.reduce((s,r)=>s+Number(r.qty||0),0)
-                const amt=yr.reduce((s,r)=>s+Number(r.amount||0),0)
+                const yearAmt=yr.reduce((s,r)=>s+amt(r),0)
                 return (
                   <div key={y} className="year-row">
                     <span className="year-label">{y}</span>
                     <span className="year-usd" style={{color}}>{fmtStreams(qty)} streams</span>
-                    <span className="year-qty">{fmtNative(amt)}</span>
+                    <span className="year-qty">{fmtNative(yearAmt)}</span>
                   </div>
                 )
               })}
