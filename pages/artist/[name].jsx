@@ -253,18 +253,46 @@ export default function ArtistPage() {
           <div>
             <div className="two-col">
               <div>
-                <div className="chart-label">Par royalties</div>
-                {byTitle.map(([t,v])=>(
-                  <HBar key={t} name={t} value={v.amt} maxValue={maxTitleAmt} color={color}
-                    formatVal={fmtNative} right={fmtStreams(v.qty)+' str'}/>
-                ))}
+                <div className="plat-table-header">
+                  <span className="pt-name">Titre</span>
+                  <span className="pt-bar"/>
+                  <span className="pt-streams">Streams</span>
+                  <span className="pt-rev">Revenus</span>
+                </div>
+                {byTitle.map(([t,v])=>{
+                  const w = maxTitleAmt > 0 ? Math.min(Math.abs(v.amt)/maxTitleAmt*100,100) : 0
+                  return (
+                    <div key={t} className="plat-row">
+                      <span className="pt-name">{t.length>20?t.slice(0,18)+'…':t}</span>
+                      <div className="pt-bar">
+                        <div style={{width:`${w}%`,height:'100%',background:color,borderRadius:2,minWidth:3}}/>
+                      </div>
+                      <span className="pt-streams">{fmtStreams(v.qty)}</span>
+                      <span className="pt-rev" style={{color}}>{fmtNative(v.amt)}</span>
+                    </div>
+                  )
+                })}
               </div>
               <div>
-                <div className="chart-label">Par streams</div>
-                {[...byTitle].sort((a,b)=>b[1].qty-a[1].qty).slice(0,10).map(([t,v])=>(
-                  <HBar key={t} name={t} value={v.qty} maxValue={maxTitleQty} color={color}
-                    formatVal={fmtStreams} right={fmtNative(v.amt)}/>
-                ))}
+                <div className="plat-table-header">
+                  <span className="pt-name">Titre</span>
+                  <span className="pt-bar"/>
+                  <span className="pt-streams">Revenus</span>
+                  <span className="pt-rev">Streams</span>
+                </div>
+                {[...byTitle].sort((a,b)=>b[1].qty-a[1].qty).slice(0,10).map(([t,v])=>{
+                  const w = maxTitleQty > 0 ? Math.min(v.qty/maxTitleQty*100,100) : 0
+                  return (
+                    <div key={t} className="plat-row">
+                      <span className="pt-name">{t.length>20?t.slice(0,18)+'…':t}</span>
+                      <div className="pt-bar">
+                        <div style={{width:`${w}%`,height:'100%',background:color,borderRadius:2,minWidth:3}}/>
+                      </div>
+                      <span className="pt-streams">{fmtNative(v.amt)}</span>
+                      <span className="pt-rev" style={{color}}>{fmtStreams(v.qty)}</span>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           </div>
