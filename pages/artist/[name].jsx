@@ -42,8 +42,15 @@ export default function ArtistPage() {
   const color = COLORS[artist] || '#888'
   const { rate } = useRate()
 
-  const [rows, setRows] = useState([])
+  // Données agrégées (vue) — KPIs + graphiques Revenus/Streams
+  const [viewRows, setViewRows] = useState([])
   const [loading, setLoading] = useState(true)
+
+  // Données brutes — Titres, Plateformes, Pays (lazy)
+  const [detailRows, setDetailRows] = useState([])
+  const [detailYear, setDetailYear] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+
   const [tab, setTab] = useState('Revenus')
   const [yearFilter, setYearFilter] = useState('Tout')
 
@@ -51,36 +58,66 @@ export default function ArtistPage() {
     supabase.auth.getSession().then(({data})=>{if(!data.session)router.replace('/login')})
   },[])
 
-  useEffect(()=>{ if(artist) fetchData() },[artist])
+  useEffect(()=>{ if(artist) fetchViewData() },[artist])
 
-  async function fetchData() {
+  // Charge la vue agrégée (quelques dizaines de lignes — instantané)
+  async function fetchViewData() {
     setLoading(true)
-    let all=[], from=0
-    while(true){
-      const {data,error} = await supabase.from('royalties')
-        .select('month,title,store,country,isrc,amount,currency,qty')
-        .eq('artist',artist).order('month',{ascending:true})
-        .range(from,from+999)
-      if(error||!data||!data.length) break
-      all = all.concat(data)
-      if(data.length<1000) break
-      from+=1000
-    }
-    setRows(all)
+    const { data, error } = await supabase
+      .from('royalties_monthly')
+      .select('month, amount_eur, amount_usd, qty, currency')
+      .eq('artist', artist)
+      .order('month', { ascending: true })
+    setViewRows(error ? [] : (data || []))
     setLoading(false)
   }
 
-  // Détection devise — gère le cas mixte (ex: NoSnow Warner EUR + DistroKid USD)
-  const { isMixed, currency } = useMemo(()=>{
-    const hasEur = rows.some(r => r.currency === 'EUR')
-    const hasUsd = rows.some(r => r.currency === 'USD')
-    const mixed = hasEur && hasUsd
-    return { isMixed: mixed, currency: mixed ? 'EUR' : (rows[0]?.currency || 'USD') }
-  },[rows])
+  // Charge les lignes brutes à la demande (Titres/Plateformes/Pays)
+  async function fetchDetailData(year) {
+    if (detailYear === year && detailRows.length > 0) return
+    setDetailLoading(true)
+    let all=[], from=0
+    let query = supabase.from('royalties')
+      .select('month,title,store,country,amount,currency,qty')
+      .eq('artist', artist)
+    if (year !== 'Tout') query = query.like('month', `${year}-%`)
+    while(true){
+      const {data,error} = await query.range(from,from+999)
+      if(error||!data?.length) break
+      all=all.concat(data)
+      if(data.length<1000) break
+      from+=1000
+    }
+    setDetailRows(all)
+    setDetailYear(year)
+    setDetailLoading(false)
+  }
 
-  // Convertit une ligne dans la devise d'affichage
-  const amt = r => {
-    const a = Number(r.amount || 0)
+  useEffect(()=>{
+    if((tab==='Titres'||tab==='Plateformes'||tab==='Pays') && artist) {
+      fetchDetailData(yearFilter)
+    }
+  },[tab, yearFilter, artist])
+
+  // ── Devise native ──────────────────────────────────────────
+  const { isMixed, currency } = useMemo(()=>{
+    const hasEur = viewRows.some(r => Number(r.amount_eur||0) > 0)
+    const hasUsd = viewRows.some(r => Number(r.amount_usd||0) > 0)
+    const mixed = hasEur && hasUsd
+    return { isMixed: mixed, currency: mixed ? 'EUR' : (viewRows[0]?.currency || 'USD') }
+  },[viewRows])
+
+  // Convertit une ligne de la vue dans la devise d'affichage
+  const amtView = r => {
+    const eur = Number(r.amount_eur||0)
+    const usd = Number(r.amount_usd||0)
+    if (currency === 'EUR') return eur + usd * rate
+    return usd + eur / rate
+  }
+
+  // Convertit une ligne brute dans la devise d'affichage
+  const amtDetail = r => {
+    const a = Number(r.amount||0)
     if (isMixed) return r.currency === 'EUR' ? a : a * rate
     return a
   }
@@ -88,65 +125,74 @@ export default function ArtistPage() {
   const fmtNative = v => fmtAmount(v, currency)
   const sym = currencySymbol(currency)
 
-  const months  = useMemo(()=>[...new Set(rows.map(r=>r.month))].sort(),[rows])
+  // ── Calculs sur la vue (Revenus, Streams, KPIs) ─────────────
+  const months  = useMemo(()=>[...new Set(viewRows.map(r=>r.month))].sort(),[viewRows])
   const years   = useMemo(()=>[...new Set(months.map(m=>m.slice(0,4)))].sort().reverse(),[months])
-  const filtered= useMemo(()=>yearFilter==='Tout'?rows:rows.filter(r=>r.month.startsWith(yearFilter)),[rows,yearFilter])
+  const filteredView = useMemo(()=>yearFilter==='Tout'?viewRows:viewRows.filter(r=>r.month.startsWith(yearFilter)),[viewRows,yearFilter])
 
   const lastM = months[months.length-1]
   const prevM = months[months.length-2]
 
-  const totalAmt = useMemo(()=>rows.reduce((s,r)=>s+amt(r),0),[rows,rate])
-  const totalQty = useMemo(()=>rows.reduce((s,r)=>s+Number(r.qty||0),0),[rows])
-  const lastAmt  = useMemo(()=>rows.filter(r=>r.month===lastM).reduce((s,r)=>s+amt(r),0),[rows,lastM,rate])
-  const prevAmt  = useMemo(()=>rows.filter(r=>r.month===prevM).reduce((s,r)=>s+amt(r),0),[rows,prevM,rate])
-  const lastQty  = useMemo(()=>rows.filter(r=>r.month===lastM).reduce((s,r)=>s+Number(r.qty||0),0),[rows,lastM])
-  const prevQty  = useMemo(()=>rows.filter(r=>r.month===prevM).reduce((s,r)=>s+Number(r.qty||0),0),[rows,prevM])
+  const totalAmt = useMemo(()=>viewRows.reduce((s,r)=>s+amtView(r),0),[viewRows,rate])
+  const totalQty = useMemo(()=>viewRows.reduce((s,r)=>s+Number(r.qty||0),0),[viewRows])
+  const lastAmt  = useMemo(()=>viewRows.filter(r=>r.month===lastM).reduce((s,r)=>s+amtView(r),0),[viewRows,lastM,rate])
+  const prevAmt  = useMemo(()=>viewRows.filter(r=>r.month===prevM).reduce((s,r)=>s+amtView(r),0),[viewRows,prevM,rate])
+  const lastQty  = useMemo(()=>viewRows.filter(r=>r.month===lastM).reduce((s,r)=>s+Number(r.qty||0),0),[viewRows,lastM])
+  const prevQty  = useMemo(()=>viewRows.filter(r=>r.month===prevM).reduce((s,r)=>s+Number(r.qty||0),0),[viewRows,prevM])
   const dAmt = deltaStr(lastAmt,prevAmt)
   const dQty = deltaStr(lastQty,prevQty)
 
   const monthlyData = useMemo(()=>{
-    const ms=[...new Set(filtered.map(r=>r.month))].sort()
+    const ms=[...new Set(filteredView.map(r=>r.month))].sort()
     return ms.map(m=>({
       month:m.slice(2),
-      amt:Math.round(filtered.filter(r=>r.month===m).reduce((s,r)=>s+amt(r),0)),
-      qty:filtered.filter(r=>r.month===m).reduce((s,r)=>s+Number(r.qty||0),0),
+      amt:Math.round(filteredView.filter(r=>r.month===m).reduce((s,r)=>s+amtView(r),0)),
+      qty:filteredView.filter(r=>r.month===m).reduce((s,r)=>s+Number(r.qty||0),0),
     }))
-  },[filtered])
+  },[filteredView,rate])
+
+  // ── Calculs sur les données brutes (Titres, Plateformes, Pays) ─
+  const filteredDetail = useMemo(()=>yearFilter==='Tout'?detailRows:detailRows.filter(r=>r.month.startsWith(yearFilter)),[detailRows,yearFilter])
 
   const byTitle = useMemo(()=>{
     const m={}
-    filtered.forEach(r=>{
+    filteredDetail.forEach(r=>{
       if(!m[r.title])m[r.title]={amt:0,qty:0}
-      m[r.title].amt+=amt(r); m[r.title].qty+=Number(r.qty||0)
+      m[r.title].amt+=amtDetail(r); m[r.title].qty+=Number(r.qty||0)
     })
     return Object.entries(m).sort((a,b)=>b[1].amt-a[1].amt)
-  },[filtered,rate])
+  },[filteredDetail,rate])
 
   const byPlat = useMemo(()=>{
     const m={}
-    filtered.forEach(r=>{
+    filteredDetail.forEach(r=>{
       if(!m[r.store])m[r.store]={amt:0,qty:0}
-      m[r.store].amt+=amt(r); m[r.store].qty+=Number(r.qty||0)
+      m[r.store].amt+=amtDetail(r); m[r.store].qty+=Number(r.qty||0)
     })
     return Object.entries(m).sort((a,b)=>b[1].amt-a[1].amt)
-  },[filtered,rate])
+  },[filteredDetail,rate])
 
   const byCountry = useMemo(()=>{
     const m={}
-    filtered.forEach(r=>{
+    filteredDetail.forEach(r=>{
       if(!r.country)return
       if(!m[r.country])m[r.country]={amt:0,qty:0}
-      m[r.country].amt+=amt(r); m[r.country].qty+=Number(r.qty||0)
+      m[r.country].amt+=amtDetail(r); m[r.country].qty+=Number(r.qty||0)
     })
     return Object.entries(m).sort((a,b)=>b[1].qty-a[1].qty).slice(0,15)
-  },[filtered,rate])
+  },[filteredDetail,rate])
 
   const maxTitleAmt=Math.max(...byTitle.map(([,v])=>Math.abs(v.amt)),1)
   const maxTitleQty=Math.max(...byTitle.map(([,v])=>v.qty),1)
   const maxPlatAmt =Math.max(...byPlat.map(([,v])=>Math.abs(v.amt)),1)
   const maxCountryQty=Math.max(...byCountry.map(([,v])=>v.qty),1)
-
   const platPie=byPlat.slice(0,8).map(([name,v],i)=>({name,value:Math.round(v.amt),color:PLAT_COLORS[i]}))
+
+  // yearly breakdown depuis la vue
+  const yearlyData = useMemo(()=>years.map(y=>{
+    const yr=viewRows.filter(r=>r.month.startsWith(y))
+    return { y, amt: yr.reduce((s,r)=>s+amtView(r),0), qty: yr.reduce((s,r)=>s+Number(r.qty||0),0) }
+  }),[viewRows,years,rate])
 
   if(loading) return (
     <div className="loading-screen">
@@ -202,18 +248,13 @@ export default function ArtistPage() {
               </ResponsiveContainer>
             </div>
             <div className="yearly-breakdown">
-              {years.map(y=>{
-                const yr=rows.filter(r=>r.month.startsWith(y))
-                const yearAmt=yr.reduce((s,r)=>s+amt(r),0)
-                const qty=yr.reduce((s,r)=>s+Number(r.qty||0),0)
-                return (
-                  <div key={y} className="year-row">
-                    <span className="year-label">{y}</span>
-                    <span className="year-usd" style={{color}}>{fmtNative(yearAmt)}</span>
-                    <span className="year-qty">{fmtStreams(qty)} streams</span>
-                  </div>
-                )
-              })}
+              {yearlyData.map(({y,amt:a,qty})=>(
+                <div key={y} className="year-row">
+                  <span className="year-label">{y}</span>
+                  <span className="year-usd" style={{color}}>{fmtNative(a)}</span>
+                  <span className="year-qty">{fmtStreams(qty)} streams</span>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -233,15 +274,16 @@ export default function ArtistPage() {
               </ResponsiveContainer>
             </div>
             <div className="yearly-breakdown">
-              {years.map(y=>{
-                const yr=rows.filter(r=>r.month.startsWith(y))
-                const qty=yr.reduce((s,r)=>s+Number(r.qty||0),0)
-                const yearAmt=yr.reduce((s,r)=>s+amt(r),0)
+              {yearlyData.map(({y,amt:a,qty})=>(
+                <div key={y} className="year-row">
+                  <span className="year-label">{y}</span>
+                  <span className="year-usd" style={{color}}>{fmtStreams(qty)} streams</span>
+                  <span className="year-qty">{fmtNative(a)}</span>
                 return (
                   <div key={y} className="year-row">
                     <span className="year-label">{y}</span>
                     <span className="year-usd" style={{color}}>{fmtStreams(qty)} streams</span>
-                    <span className="year-qty">{fmtNative(yearAmt)}</span>
+                    <span className="year-qty">{fmtNative(a)}</span>
                   </div>
                 )
               })}
@@ -251,6 +293,12 @@ export default function ArtistPage() {
 
         {tab==='Titres'&&(
           <div>
+            {detailLoading ? (
+              <div style={{textAlign:'center',padding:'40px 0',color:'#444'}}>
+                <div className="detail-spinner" style={{borderTopColor:color}}/>
+                Chargement…
+              </div>
+            ) : (
             <div className="two-col">
               <div>
                 <div className="plat-table-header">
@@ -295,11 +343,18 @@ export default function ArtistPage() {
                 })}
               </div>
             </div>
+            )}
           </div>
         )}
 
         {tab==='Plateformes'&&(
           <div>
+            {detailLoading ? (
+              <div style={{textAlign:'center',padding:'40px 0',color:'#444'}}>
+                <div className="detail-spinner" style={{borderTopColor:color}}/>
+                Chargement…
+              </div>
+            ) : (<>
             {/* Donut chart compact en haut */}
             <div style={{display:'flex',gap:20,alignItems:'center',marginBottom:20}}>
               <div style={{width:140,height:140,flexShrink:0}}>
@@ -344,11 +399,18 @@ export default function ArtistPage() {
                 </div>
               )
             })}
+            </>)}
           </div>
         )}
 
         {tab==='Pays'&&(
           <div>
+            {detailLoading ? (
+              <div style={{textAlign:'center',padding:'40px 0',color:'#444'}}>
+                <div className="detail-spinner" style={{borderTopColor:color}}/>
+                Chargement…
+              </div>
+            ) : (<>
             <div className="plat-table-header">
               <span className="pt-name">Pays</span>
               <span className="pt-bar"/>
@@ -368,6 +430,7 @@ export default function ArtistPage() {
                 </div>
               )
             })}
+            </>)}
           </div>
         )}
       </div>
@@ -401,6 +464,8 @@ export default function ArtistPage() {
         .plat-legend{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:8px;font-size:11px;color:#888}
         .plat-item{display:flex;align-items:center;gap:4px}
         .plat-dot{width:7px;height:7px;border-radius:2px;flex-shrink:0}
+        .detail-spinner{width:22px;height:22px;border:2px solid #1e1e1e;border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 10px}
+        @keyframes spin{to{transform:rotate(360deg)}}
         .plat-legend-inline{display:flex;flex-wrap:wrap;gap:4px 14px;align-content:flex-start}
         .plat-legend-item{display:flex;align-items:center;gap:5px;font-size:11px;color:#888}
         .plat-table-header{display:grid;grid-template-columns:120px 1fr 64px 80px;gap:8px;padding:4px 0 6px;border-bottom:1px solid #1e1e1e;margin-bottom:4px}
