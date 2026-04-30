@@ -272,44 +272,74 @@ export default function ArtistPage() {
 
         {tab==='Plateformes'&&(
           <div>
-            <div className="two-col">
-              <div>
-                <div className="chart-label">Royalties par plateforme</div>
-                {byPlat.map(([p,v],i)=>(
-                  <HBar key={p} name={p} value={v.amt} maxValue={maxPlatAmt}
-                    color={PLAT_COLORS[i%PLAT_COLORS.length]} formatVal={fmtNative} right={fmtStreams(v.qty)}/>
+            {/* Donut chart compact en haut */}
+            <div style={{display:'flex',gap:20,alignItems:'center',marginBottom:20}}>
+              <div style={{width:140,height:140,flexShrink:0}}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={platPie} cx="50%" cy="50%" innerRadius={40} outerRadius={65} dataKey="value" stroke="none">
+                      {platPie.map(({name,color:c})=><Cell key={name} fill={c}/>)}
+                    </Pie>
+                    <Tooltip contentStyle={{background:'#1a1a1a',border:'1px solid #222',borderRadius:6,fontSize:11}}
+                      formatter={v=>[fmtNative(v)]}/>
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="plat-legend-inline">
+                {platPie.map(({name,color:c},i)=>(
+                  <div key={name} className="plat-legend-item">
+                    <span className="plat-dot" style={{background:c}}/>
+                    <span>{name}</span>
+                  </div>
                 ))}
               </div>
-              <div>
-                <div className="chart-label">Répartition</div>
-                <div style={{height:220}}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={platPie} cx="50%" cy="50%" innerRadius={55} outerRadius={85} dataKey="value" stroke="none">
-                        {platPie.map(({name,color:c})=><Cell key={name} fill={c}/>)}
-                      </Pie>
-                      <Tooltip contentStyle={{background:'#1a1a1a',border:'1px solid #222',borderRadius:6,fontSize:11}}
-                        formatter={v=>[fmtNative(v)]}/>
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="plat-legend">
-                  {platPie.map(({name,color:c})=>(
-                    <div key={name} className="plat-item"><span className="plat-dot" style={{background:c}}/>{name}</div>
-                  ))}
-                </div>
-              </div>
             </div>
+
+            {/* Tableau compact — tout sur une ligne */}
+            <div className="plat-table-header">
+              <span className="pt-name">Plateforme</span>
+              <span className="pt-bar" />
+              <span className="pt-streams">Streams</span>
+              <span className="pt-rev">Revenus</span>
+            </div>
+            {byPlat.map(([p,v],i)=>{
+              const w = maxPlatAmt > 0 ? Math.min(Math.abs(v.amt)/maxPlatAmt*100,100) : 0
+              const c = PLAT_COLORS[i%PLAT_COLORS.length]
+              return (
+                <div key={p} className="plat-row">
+                  <span className="pt-name">{p.length>20?p.slice(0,18)+'…':p}</span>
+                  <div className="pt-bar">
+                    <div style={{width:`${w}%`,height:'100%',background:c,borderRadius:2,minWidth:3}}/>
+                  </div>
+                  <span className="pt-streams">{fmtStreams(v.qty)}</span>
+                  <span className="pt-rev" style={{color:c}}>{fmtNative(v.amt)}</span>
+                </div>
+              )
+            })}
           </div>
         )}
 
         {tab==='Pays'&&(
           <div>
-            <div className="chart-label">Top pays par streams</div>
-            {byCountry.map(([c,v])=>(
-              <HBar key={c} name={c} value={v.qty} maxValue={maxCountryQty} color={color}
-                formatVal={fmtStreams} right={fmtNative(v.amt)}/>
-            ))}
+            <div className="plat-table-header">
+              <span className="pt-name">Pays</span>
+              <span className="pt-bar"/>
+              <span className="pt-streams">Streams</span>
+              <span className="pt-rev">Revenus</span>
+            </div>
+            {byCountry.map(([c,v])=>{
+              const w = maxCountryQty > 0 ? Math.min(v.qty/maxCountryQty*100,100) : 0
+              return (
+                <div key={c} className="plat-row">
+                  <span className="pt-name">{c||'—'}</span>
+                  <div className="pt-bar">
+                    <div style={{width:`${w}%`,height:'100%',background:color,borderRadius:2,minWidth:3}}/>
+                  </div>
+                  <span className="pt-streams">{fmtStreams(v.qty)}</span>
+                  <span className="pt-rev" style={{color}}>{fmtNative(v.amt)}</span>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
@@ -343,6 +373,17 @@ export default function ArtistPage() {
         .plat-legend{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:8px;font-size:11px;color:#888}
         .plat-item{display:flex;align-items:center;gap:4px}
         .plat-dot{width:7px;height:7px;border-radius:2px;flex-shrink:0}
+        .plat-legend-inline{display:flex;flex-wrap:wrap;gap:4px 14px;align-content:flex-start}
+        .plat-legend-item{display:flex;align-items:center;gap:5px;font-size:11px;color:#888}
+        .plat-table-header{display:grid;grid-template-columns:120px 1fr 64px 80px;gap:8px;padding:4px 0 6px;border-bottom:1px solid #1e1e1e;margin-bottom:4px}
+        .plat-table-header span{font-size:9px;color:#444;text-transform:uppercase;letter-spacing:1px}
+        .pt-streams{text-align:right}.pt-rev{text-align:right}
+        .plat-row{display:grid;grid-template-columns:120px 1fr 64px 80px;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #141414}
+        .plat-row:hover{background:#1a1a1a;border-radius:4px}
+        .pt-name{font-size:12px;color:#bbb;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .pt-bar{height:6px;background:#1a1a1a;border-radius:2px;overflow:hidden}
+        .pt-streams{font-size:11px;color:#555;text-align:right}
+        .pt-rev{font-size:12px;font-weight:700;text-align:right}
       `}</style>
     </div>
   )
