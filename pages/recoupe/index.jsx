@@ -288,8 +288,8 @@ export default function RecoupeIndex() {
                     </div>
                   )}
 
-                  {/* AVANCE ARTISTE */}
-                  {s.artistAdvance > 0 && (!s.isWarner || s.distribPhase?.done) && (
+                  {/* AVANCE ARTISTE (schéma 1 uniquement — en schéma 2 elle est payée via l'avance distrib) */}
+                  {s.artistAdvance > 0 && !s.isWarner && (
                     <div className="tracker-row">
                       <span className="tr-icon">🎤</span>
                       <span className="tr-label">Avance {serie.artist.split(' ')[0]}</span>
@@ -306,11 +306,11 @@ export default function RecoupeIndex() {
                     </div>
                   )}
 
-                  {/* FABRICATION */}
+                  {/* FABRICATION ou APPORT EXTRA (schéma 2) */}
                   {s.fabricationCost > 0 && (!s.isWarner || s.distribPhase?.done) && (
                     <div className="tracker-row">
                       <span className="tr-icon">🏭</span>
-                      <span className="tr-label">Fabrication</span>
+                      <span className="tr-label">{s.isWarner ? 'Apport Avlanche' : 'Fabrication'}</span>
                       <div className="tr-bar">
                         <div className="tr-fill" style={{ width: `${lPct}%`, background: s.fabricationDone ? '#6ee7b7' : '#f97316' }} />
                       </div>
@@ -321,6 +321,16 @@ export default function RecoupeIndex() {
                           : <>{fmtEur(s.fabricationRecouped)} / {fmtEur(s.fabricationCost)}</>
                         }
                       </span>
+                    </div>
+                  )}
+
+                  {/* Note pour les projets Warner avec cash artiste direct */}
+                  {s.isWarner && s.distribPhase?.done && s.artistCash > 0 && (
+                    <div className="tracker-row" style={{ background: '#0a0a14', border: '1px solid #1a1a2a', borderRadius: 5, padding: '6px 8px', marginBottom: 8 }}>
+                      <span className="tr-icon">🎤</span>
+                      <span className="tr-label">Cash {serie.artist.split(' ')[0]}</span>
+                      <span style={{ flex: 1, fontSize: 11, color: '#a78bfa' }}>{serie.artist_rate}% direct sur revenus post-Warner</span>
+                      <span className="tr-amounts" style={{ color: '#a78bfa', fontWeight: 700 }}>{fmtEur(s.artistCash)}</span>
                     </div>
                   )}
 
