@@ -166,7 +166,7 @@ export default function LabelPage() {
       if (!m[r.title]) { m[r.title] = { eur: 0, qty: 0 }; ma[r.title] = r.artist }
       m[r.title].eur += detailEur(r); m[r.title].qty += Number(r.qty||0)
     })
-    return Object.entries(m).sort((a,b) => b[1].eur - a[1].eur).slice(0,10)
+    return Object.entries(m).sort((a,b) => b[1].eur - a[1].eur)
       .map(([t,v]) => ({ title: t, ...v, artist: ma[t] }))
   }, [detailFiltered, eurRate])
 
@@ -271,14 +271,27 @@ export default function LabelPage() {
 
         {tab==='Artistes' && (
           <div>
-            <div className="chart-label">Royalties par artiste (EUR)</div>
-            {byArtist.map(({artist,eur:e,qty}) => (
-              <div key={artist} className="artist-row-click" onClick={() => router.push(`/artist/${encodeURIComponent(artist)}`)}>
-                <HBar name={artist} value={e} maxValue={maxArtistEur} color={COLORS[artist]||'#888'}
-                  formatVal={fmtEur} right={fmtStreams(qty)+' str'}/>
-                <span className="row-arrow">→</span>
-              </div>
-            ))}
+            <div className="plat-table-header">
+              <span className="pt-name">Artiste</span>
+              <span className="pt-bar"/>
+              <span className="pt-streams">Streams</span>
+              <span className="pt-rev">Revenus</span>
+            </div>
+            {byArtist.map(({artist,eur:e,qty}) => {
+              const w = maxArtistEur > 0 ? Math.min(e/maxArtistEur*100,100) : 0
+              const c = COLORS[artist]||'#888'
+              return (
+                <div key={artist} className="plat-row" style={{cursor:'pointer'}}
+                  onClick={() => router.push(`/artist/${encodeURIComponent(artist)}`)}>
+                  <span className="pt-name" style={{color:'#eee',fontWeight:600}}>{artist}</span>
+                  <div className="pt-bar">
+                    <div style={{width:`${w}%`,height:'100%',background:c,borderRadius:2,minWidth:3}}/>
+                  </div>
+                  <span className="pt-streams">{fmtStreams(qty)}</span>
+                  <span className="pt-rev" style={{color:c}}>{fmtEur(e)}</span>
+                </div>
+              )
+            })}
           </div>
         )}
 
@@ -291,8 +304,44 @@ export default function LabelPage() {
               </div>
             ) : (
               <>
-                <div className="plat-table-header">
-                  <span className="pt-name">Titre</span>
+                {/* Top 5 par artiste */}
+                {allArtists.map(artist => {
+                  const artistTitles = byTitle.filter(t => t.artist === artist).slice(0, 5)
+                  if (!artistTitles.length) return null
+                  const maxEur = artistTitles[0]?.eur || 1
+                  const c = COLORS[artist]||'#888'
+                  return (
+                    <div key={artist} style={{marginBottom:20}}>
+                      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+                        <span style={{width:8,height:8,borderRadius:'50%',background:c,flexShrink:0,display:'inline-block'}}/>
+                        <span style={{fontSize:11,fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:'1px'}}>{artist}</span>
+                      </div>
+                      <div className="plat-table-header">
+                        <span className="pt-name">Titre</span>
+                        <span className="pt-bar"/>
+                        <span className="pt-streams">Streams</span>
+                        <span className="pt-rev">Revenus</span>
+                      </div>
+                      {artistTitles.map(({title,eur:e,qty}) => {
+                        const w = maxEur > 0 ? Math.min(e/maxEur*100,100) : 0
+                        return (
+                          <div key={title} className="plat-row">
+                            <span className="pt-name">{title.length>20?title.slice(0,18)+'…':title}</span>
+                            <div className="pt-bar">
+                              <div style={{width:`${w}%`,height:'100%',background:c,borderRadius:2,minWidth:3}}/>
+                            </div>
+                            <span className="pt-streams">{fmtStreams(qty)}</span>
+                            <span className="pt-rev" style={{color:c}}>{fmtEur(e)}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </>
+            )}
+          </div>
+        )}
                   <span className="pt-bar"/>
                   <span className="pt-streams">Streams</span>
                   <span className="pt-rev">Revenus</span>
