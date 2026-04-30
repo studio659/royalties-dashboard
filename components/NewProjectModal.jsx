@@ -340,15 +340,36 @@ export default function NewProjectModal({ onClose, onSuccess, defaultArtist }) {
           {/* ── STEP 3 : Budget ── */}
           {step === 3 && (
             <div>
-              <div className="field">
-                <label>Avance versée à l'artiste (€)</label>
-                <input type="number" value={artistAdvance} onChange={e => setArtistAdvance(e.target.value)} placeholder="ex: 500" min="0" />
-                <div className="hint">Recoupée via le % théorique de l'artiste avant qu'il touche du cash</div>
-              </div>
+              {scheme === 'aggregator' && (
+                <div className="field">
+                  <label>Avance versée à l'artiste (€)</label>
+                  <input type="number" value={artistAdvance} onChange={e => setArtistAdvance(e.target.value)} placeholder="ex: 500" min="0" />
+                  <div className="hint">Recoupée via le % théorique de l'artiste avant qu'il touche du cash</div>
+                </div>
+              )}
+
+              {scheme === 'distributor' && (
+                <div className="field">
+                  <label>Avance artiste payée via l'avance distrib (€) <span style={{ color: '#666', fontWeight: 400 }}>(info)</span></label>
+                  <input type="number" value={artistAdvance} onChange={e => setArtistAdvance(e.target.value)} placeholder="ex: 14000" min="0" />
+                  <div className="hint">⚠️ Pour info uniquement. En schéma 2, l'avance artiste est implicitement recoupée via l'avance distrib. L'artiste touchera son % direct dès que le distrib sera recoupé.</div>
+                </div>
+              )}
 
               <div className="hbox" style={{ marginTop: 18 }}>
-                <strong>Budget de fabrication</strong> (clip, master, promo, photographe…)
-                {!isSingle && selectedTitles.length > 1 && <><br />Un seul budget global pour les {selectedTitles.length} titres du projet.</>}
+                {scheme === 'aggregator' ? (
+                  <>
+                    <strong>Budget de fabrication</strong> (clip, master, promo, photographe…)
+                    {!isSingle && selectedTitles.length > 1 && <><br />Un seul budget global pour les {selectedTitles.length} titres du projet.</>}
+                  </>
+                ) : (
+                  <>
+                    <strong>Apport Avlanche en plus de l'avance distrib</strong>
+                    <br />⚠️ <span style={{ color: '#f59e0b' }}>Ne renseignez ici que ce que vous dépensez de votre poche EN PLUS de l'avance {distribName || 'distrib'}.</span>
+                    <br />Si toute la fabrication est payée via l'avance distrib (cas standard) → laissez vide ou 0€.
+                    <br /><br />Une fois l'avance distrib recoupée, Avlanche entre directement en bénéfice (sans recoupe fab supplémentaire).
+                  </>
+                )}
               </div>
 
               {budgetTitles.map(title => {
