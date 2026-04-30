@@ -279,14 +279,8 @@ export default function ArtistPage() {
                   <span className="year-label">{y}</span>
                   <span className="year-usd" style={{color}}>{fmtStreams(qty)} streams</span>
                   <span className="year-qty">{fmtNative(a)}</span>
-                return (
-                  <div key={y} className="year-row">
-                    <span className="year-label">{y}</span>
-                    <span className="year-usd" style={{color}}>{fmtStreams(qty)} streams</span>
-                    <span className="year-qty">{fmtNative(a)}</span>
-                  </div>
-                )
-              })}
+                </div>
+              ))}
             </div>
           </div>
         )}
