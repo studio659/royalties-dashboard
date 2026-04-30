@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
 import { supabase } from '../../lib/supabase'
 import { useRate } from '../../lib/rateContext'
-import { COLORS, fmt, fmtStreams } from '../../lib/artists'
+import { COLORS, fmtStreams } from '../../lib/artists'
+import { computeRecoupe, fmtEur, pctColor, phaseLabel } from '../../lib/recoupe'
 import MainNav from '../../components/MainNav'
 
 export default function SerieDetail() {
@@ -35,7 +36,6 @@ export default function SerieDetail() {
     if (!s) { setLoading(false); return }
     setSerie(s)
 
-    // Fetch royalties filtrées par artiste uniquement (pas tout charger)
     let allRoy = [], from = 0
     while (true) {
       const { data, error } = await supabase
@@ -43,7 +43,7 @@ export default function SerieDetail() {
         .select('title, artist, amount, currency, qty, month')
         .eq('artist', s.artist)
         .range(from, from + 999)
-      if (error || !data || data.length === 0) break
+      if (error || !data?.length) break
       allRoy = allRoy.concat(data)
       if (data.length < 1000) break
       from += 1000
@@ -52,52 +52,56 @@ export default function SerieDetail() {
     setLoading(false)
   }
 
-  function royToUsd(r) {
-    const a = Number(r.amount ?? r.usd ?? 0)
-    if (r.currency === 'EUR') return a / rate
-    return a
-  }
-
   function exportCSV() {
     if (!serie) return
-    const rows = [['Titre','Budget €','Généré $','Recoupe %','Reste $','Streams','Estimation']]
-    singles.forEach(s => {
-      const st = getSingleStats(s)
-      rows.push([
-        s.title,
-        Math.round(s.budget_eur || 0),
-        st.totalUsd.toFixed(2),
-        st.pct.toFixed(1),
-        st.remaining.toFixed(2),
-        st.totalQty,
-        st.monthsLeft ? `~${st.monthsLeft} mois` : st.hasEnoughData ? '—' : '<3 mois données'
-      ])
-    })
+    const stats = getGlobalStats()
+    const rows = [
+      ['Métrique', 'Valeur'],
+      ['Projet', serie.name],
+      ['Artiste', serie.artist],
+      ['Phase', phaseLabel(stats.phase)],
+      ['Total généré (€)', stats.grossRevenue.toFixed(2)],
+      ['Streams', stats.totalQty],
+      ['Avance distrib (€)', stats.distribPhase?.advance || 0],
+      ['Avance distrib recoupée (€)', stats.distribPhase?.recouped || 0],
+      ['Avance artiste (€)', stats.artistAdvance],
+      ['Avance artiste recoupée (€)', stats.artistAdvanceRecouped.toFixed(2)],
+      ['Cash artiste perçu (€)', stats.artistCash.toFixed(2)],
+      ['Fabrication (€)', stats.fabricationCost],
+      ['Fabrication recoupée (€)', stats.fabricationRecouped.toFixed(2)],
+      ['Bénéfice label (€)', stats.labelNet.toFixed(2)],
+      ['Bénéfice coprod (€)', stats.coprodNet.toFixed(2)],
+    ]
     const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `recoupe_${serie.name.replace(/[^a-z0-9]/gi,'_')}.csv`
+    a.download = `recoupe_${serie.name.replace(/[^a-z0-9]/gi, '_')}.csv`
     a.click()
   }
 
+  function getGlobalStats() {
+    if (!serie) return null
+    const singles = serie.singles || []
+    const allBudgetLines = singles.flatMap(s => s.budget_lines || [])
+    const titles = singles.map(s => s.title.toLowerCase())
+    const serieRoyalties = royalties.filter(r =>
+      titles.includes(r.title.toLowerCase())
+    )
+    return computeRecoupe(serie, allBudgetLines, serieRoyalties, rate)
+  }
+
+  // Stats par single (pour la liste détaillée — uniquement utile en mode "série de singles")
   function getSingleStats(single) {
     const rows = royalties.filter(r =>
       r.title.toLowerCase() === single.title.toLowerCase()
     )
-    const totalUsd = rows.reduce((s, r) => s + royToUsd(r), 0)
+    const totalEur = rows.reduce((s, r) => {
+      const a = Number(r.amount || 0)
+      return s + (r.currency === 'EUR' ? a : a * rate)
+    }, 0)
     const totalQty = rows.reduce((s, r) => s + Number(r.qty || 0), 0)
-    const budgetUsd = (single.budget_eur || 0) / rate
-    const pct = budgetUsd > 0 ? Math.min((totalUsd / budgetUsd) * 100, 100) : 0
-    const remaining = Math.max(budgetUsd - totalUsd, 0)
-    const byMonth = {}
-    rows.forEach(r => { byMonth[r.month] = (byMonth[r.month] || 0) + royToUsd(r) })
-    const months = Object.keys(byMonth).sort()
-    const last3 = months.slice(-3)
-    const avg = last3.length > 0 ? last3.reduce((s, m) => s + byMonth[m], 0) / last3.length : 0
-    const hasEnoughData = months.length >= 3
-    const monthsLeft = hasEnoughData && avg > 0 && remaining > 0 ? Math.ceil(remaining / avg) : null
-    return { totalUsd, totalQty, budgetUsd, pct, remaining, monthsLeft, months, hasEnoughData }
+    return { totalEur, totalQty }
   }
 
   if (loading || !serie) return (
@@ -108,12 +112,11 @@ export default function SerieDetail() {
   )
 
   const singles = serie.singles || []
-  const totalBudgetEur = singles.reduce((s, x) => s + (x.budget_eur || 0), 0)
-  const totalUsd = singles.reduce((s, x) => s + getSingleStats(x).totalUsd, 0)
-  const totalQty = singles.reduce((s, x) => s + getSingleStats(x).totalQty, 0)
-  const totalBudgetUsd = totalBudgetEur / rate
-  const globalPct = totalBudgetUsd > 0 ? Math.min((totalUsd / totalBudgetUsd) * 100, 100) : 0
-  const globalRemaining = Math.max(totalBudgetUsd - totalUsd, 0)
+  const stats = getGlobalStats()
+  const totalBudget = stats.fabricationCost + stats.artistAdvance
+  const totalRecouped = stats.fabricationRecouped + stats.artistAdvanceRecouped
+  const globalPct = totalBudget > 0 ? Math.min((totalRecouped / totalBudget) * 100, 100) : 0
+  const color = COLORS[serie.artist] || '#f59e0b'
 
   return (
     <div className="app">
@@ -127,111 +130,224 @@ export default function SerieDetail() {
         </div>
 
         <div className="serie-hero">
-          <div className="sh-type">{singles.length === 1 ? 'Single' : 'Série de singles'} · {serie.artist}</div>
+          <div className="sh-type">
+            {singles.length === 1 ? 'Single' : `Série · ${singles.length} titres`} · {serie.artist}
+            {stats.isWarner && <span className="warner-badge">WARNER</span>}
+          </div>
           <div className="sh-title">{serie.name}</div>
           <div className="sh-meta">
-            {serie.coprod_name && `co-prod ${serie.coprod_name} · `}
-            {serie.artist} {serie.artist_rate}% · Avlanche {serie.label_rate}% + {serie.mgmt_rate}% gestion
-            {serie.coprod_name && ` · ${serie.coprod_name} ${serie.coprod_rate}% après recoupe`}
+            Contrat : artiste {serie.artist_rate}%
+            {serie.coprod_name && ` · co-prod ${serie.coprod_name} ${serie.coprod_rate}% · label ${serie.label_rate}%`}
+            {!serie.coprod_name && ` · label 100% du restant`}
           </div>
         </div>
 
-        <div style={{display:'flex',justifyContent:'flex-end',marginBottom:12}}>
-          <button onClick={exportCSV} style={{background:'none',border:'1px solid #1e1e1e',borderRadius:6,color:'#555',fontSize:12,padding:'6px 14px',cursor:'pointer',fontFamily:'inherit'}}>
-            ↓ Exporter CSV
-          </button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <button onClick={exportCSV} className="export-btn">↓ Exporter CSV</button>
         </div>
 
-        <div className="kpi-row">
-          <div className="kpi">
-            <div className="kpi-l">Budget total investi</div>
-            <div className="kpi-v">€{Math.round(totalBudgetEur).toLocaleString('fr-FR')}</div>
-            <div className="kpi-s">≈ ${Math.round(totalBudgetUsd).toLocaleString('fr-FR')}</div>
-          </div>
-          <div className="kpi">
-            <div className="kpi-l">Généré · Recoupe globale</div>
-            <div className="kpi-v">
-              <span className="pos">{fmt(totalUsd)}</span>{' '}
-              <span style={{ fontSize: 15, color: globalPct >= 90 ? '#6ee7b7' : '#f59e0b' }}>
-                {globalPct.toFixed(1)}%
-              </span>
-            </div>
-            <div className="kpi-s">{fmt(globalRemaining)} restants · {fmtStreams(totalQty)} streams</div>
-          </div>
-          <div className="kpi">
-            <div className="kpi-l">{serie.coprod_name || 'Co-prod'} a perçu</div>
-            <div className="kpi-v muted">$0</div>
-            <div className="kpi-s">Après recoupe complète de chaque single</div>
-          </div>
-        </div>
-
-        <div className="section-label">{singles.length} single{singles.length > 1 ? 's' : ''} — cliquez pour le détail</div>
-
-        {singles.map(single => {
-          const s = getSingleStats(single)
-          const pctColor = s.pct >= 90 ? '#6ee7b7' : s.pct >= 50 ? '#f59e0b' : '#f87171'
-          return (
-            <div key={single.id} className="single-item"
-              onClick={() => router.push(`/recoupe/single/${single.id}`)}>
-              <div className="si-left">
-                <div className="si-title">{single.title}</div>
-                <div className="si-meta">
-                  {single.release_date && new Date(single.release_date).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}
-                  {s.totalQty > 0 && ` · ${fmtStreams(s.totalQty)} streams`}
-                  {single.budget_eur > 0 && ` · budget €${Math.round(single.budget_eur).toLocaleString('fr-FR')}`}
-                </div>
+        {/* PHASE WARNER (Schéma 2) */}
+        {stats.isWarner && (
+          <div className="tracker-card warner-card">
+            <div className="tc-head">
+              <div className="tc-label">Recoupe avance {stats.distribPhase.distribName}</div>
+              <div className="tc-pct" style={{ color: pctColor(stats.distribPhase.pct) }}>
+                {stats.distribPhase.pct.toFixed(1)}%
               </div>
-              <div className="si-progress">
-                <div className="si-bar-bg">
-                  <div className="si-bar-fill" style={{
-                    width: `${s.pct}%`,
-                    background: s.pct >= 90 ? 'linear-gradient(90deg,#f97316,#6ee7b7)' : '#f97316'
+            </div>
+            <div className="tc-amounts">
+              <span>{fmtEur(stats.distribPhase.recouped)} générés</span>
+              <span className="muted">/ {fmtEur(stats.distribPhase.advance)} d'avance</span>
+            </div>
+            <div className="tc-bar">
+              <div className="tc-fill" style={{
+                width: `${stats.distribPhase.pct}%`,
+                background: stats.distribPhase.done ? 'linear-gradient(90deg,#f97316,#6ee7b7)' : '#f59e0b'
+              }} />
+            </div>
+            {!stats.distribPhase.done ? (
+              <div className="tc-info">
+                ⚡ Reste {fmtEur(stats.distribPhase.remaining)} à générer pour finir la recoupe distrib.
+                {stats.projectionMonthsLeft != null && stats.hasEnoughData && ` ~${stats.projectionMonthsLeft} mois au rythme actuel.`}
+                <br/>Avlanche perçoit 0€ tant que cette avance n'est pas recoupée.
+              </div>
+            ) : (
+              <div className="tc-info" style={{ color: '#6ee7b7' }}>
+                ✓ Avance distrib recoupée. Avlanche commence à percevoir les royalties suivantes.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TRACKERS RECOUPE INTERNE (uniquement si pas Warner ou Warner recoupé) */}
+        {(!stats.isWarner || stats.distribPhase?.done) && (
+          <>
+            {/* AVANCE ARTISTE */}
+            {stats.artistAdvance > 0 && (
+              <div className="tracker-card">
+                <div className="tc-head">
+                  <div className="tc-label">Recoupe avance artiste</div>
+                  <div className="tc-pct" style={{ color: pctColor(stats.artistAdvancePct) }}>
+                    {stats.artistAdvancePct.toFixed(1)}%
+                  </div>
+                </div>
+                <div className="tc-amounts">
+                  <span>{fmtEur(stats.artistAdvanceRecouped)} récupérés via {serie.artist_rate}% théoriques</span>
+                  <span className="muted">/ {fmtEur(stats.artistAdvance)} d'avance</span>
+                </div>
+                <div className="tc-bar">
+                  <div className="tc-fill" style={{
+                    width: `${stats.artistAdvancePct}%`,
+                    background: stats.artistAdvanceDone ? 'linear-gradient(90deg,#a78bfa,#6ee7b7)' : '#a78bfa'
                   }} />
                 </div>
-                <div className="si-bar-label" style={{ color: pctColor }}>
-                  {s.pct.toFixed(1)}%
-                  {s.monthsLeft === 0 ? ' · recoupé ✓' : s.monthsLeft ? ` · ~${s.monthsLeft} mois` : !s.hasEnoughData ? ' · données insuffisantes (<3 mois)' : ' · tendance instable'}
+                {stats.artistAdvanceDone ? (
+                  <div className="tc-info" style={{ color: '#6ee7b7' }}>
+                    ✓ Avance recoupée. {serie.artist} a touché <strong>{fmtEur(stats.artistCash)}</strong> en cash sur ses {serie.artist_rate}%.
+                  </div>
+                ) : (
+                  <div className="tc-info">
+                    Reste {fmtEur(stats.artistAdvance - stats.artistAdvanceRecouped)} à recouper avant que {serie.artist} touche du cash.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* FABRICATION */}
+            <div className="tracker-card">
+              <div className="tc-head">
+                <div className="tc-label">Recoupe fabrication</div>
+                <div className="tc-pct" style={{ color: pctColor(stats.fabricationPct) }}>
+                  {stats.fabricationPct.toFixed(1)}%
+                </div>
+              </div>
+              <div className="tc-amounts">
+                <span>{fmtEur(stats.fabricationRecouped)} récupérés via {100 - serie.artist_rate}% théoriques</span>
+                <span className="muted">/ {fmtEur(stats.fabricationCost)} de fabrication</span>
+              </div>
+              <div className="tc-bar">
+                <div className="tc-fill" style={{
+                  width: `${stats.fabricationPct}%`,
+                  background: stats.fabricationDone ? 'linear-gradient(90deg,#f97316,#6ee7b7)' : '#f97316'
+                }} />
+              </div>
+              {stats.fabricationDone ? (
+                <div className="tc-info" style={{ color: '#6ee7b7' }}>
+                  ✓ Fabrication recoupée. Bénéfice label : <strong>{fmtEur(stats.labelProfit)}</strong>
+                  {stats.hasCoprod && ` (Avlanche ${fmtEur(stats.labelNet)} · ${serie.coprod_name} ${fmtEur(stats.coprodNet)})`}
+                </div>
+              ) : (
+                <div className="tc-info">
+                  Reste {fmtEur(stats.fabricationCost - stats.fabricationRecouped)} à recouper.
+                  {stats.projectionMonthsLeft != null && stats.hasEnoughData && stats.phase === 'recoupe' && ` ~${stats.projectionMonthsLeft} mois au rythme actuel.`}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* SYNTHÈSE GLOBALE */}
+        <div className="kpi-row">
+          <div className="kpi">
+            <div className="kpi-l">Budget total</div>
+            <div className="kpi-v">{fmtEur(totalBudget)}</div>
+            <div className="kpi-s">{fmtEur(stats.fabricationCost)} fab + {fmtEur(stats.artistAdvance)} avance</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-l">Total généré (brut)</div>
+            <div className="kpi-v" style={{ color: '#f59e0b' }}>{fmtEur(stats.grossRevenue)}</div>
+            <div className="kpi-s">{fmtStreams(stats.totalQty)} streams</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-l">Phase actuelle</div>
+            <div className="kpi-v" style={{ fontSize: 14, color: pctColor(globalPct) }}>{phaseLabel(stats.phase)}</div>
+            <div className="kpi-s">{globalPct.toFixed(1)}% recoupé</div>
+          </div>
+        </div>
+
+        {/* LISTE DES SINGLES */}
+        {singles.length > 1 ? (
+          <>
+            <div className="section-label">{singles.length} titres dans le projet</div>
+            {singles.map(single => {
+              const ss = getSingleStats(single)
+              return (
+                <div key={single.id} className="single-item"
+                  onClick={() => router.push(`/recoupe/single/${single.id}`)}>
+                  <div className="si-left">
+                    <div className="si-title">{single.title}</div>
+                    <div className="si-meta">
+                      {single.release_date && new Date(single.release_date).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}
+                      {ss.totalQty > 0 && ` · ${fmtStreams(ss.totalQty)} streams`}
+                    </div>
+                  </div>
+                  <div className="si-amounts">
+                    <div className="si-gen" style={{ color: ss.totalEur > 0 ? '#f59e0b' : '#555' }}>{fmtEur(ss.totalEur)}</div>
+                    <div className="si-sub">généré</div>
+                  </div>
+                  <div className="si-caret">›</div>
+                </div>
+              )
+            })}
+          </>
+        ) : singles.length === 1 ? (
+          <>
+            <div className="section-label">Détail du titre</div>
+            <div className="single-item" onClick={() => router.push(`/recoupe/single/${singles[0].id}`)}>
+              <div className="si-left">
+                <div className="si-title">{singles[0].title}</div>
+                <div className="si-meta">
+                  {singles[0].release_date && new Date(singles[0].release_date).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}
+                  {' · '}{fmtStreams(stats.totalQty)} streams
                 </div>
               </div>
               <div className="si-amounts">
-                <div className="si-gen" style={{ color: s.totalUsd > 0 ? '#6ee7b7' : '#555' }}>{fmt(s.totalUsd)}</div>
-                <div className="si-budget">/ €{Math.round(single.budget_eur).toLocaleString('fr-FR')}</div>
+                <div className="si-gen" style={{ color: '#f59e0b' }}>{fmtEur(stats.grossRevenue)}</div>
+                <div className="si-sub">généré</div>
               </div>
               <div className="si-caret">›</div>
             </div>
-          )
-        })}
+          </>
+        ) : null}
       </div>
 
       <style jsx>{`
         .breadcrumb{font-size:11px;color:#444;margin-bottom:20px;display:flex;align-items:center;gap:6px}
         .bc-link{color:#555;cursor:pointer}.bc-link:hover{color:#aaa}
         .bc-sep{color:#333}.bc-current{color:#888}
-        .serie-hero{margin-bottom:22px}
-        .sh-type{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px}
+        .serie-hero{margin-bottom:18px}
+        .sh-type{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+        .warner-badge{padding:1px 6px;border-radius:3px;background:#1a1000;color:#f59e0b;font-size:9px}
         .sh-title{font-size:22px;font-weight:700;margin-bottom:5px}
         .sh-meta{font-size:12px;color:#555;line-height:1.6}
-        .kpi-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px}
-        .kpi{background:#141414;border:1px solid #1e1e1e;border-radius:9px;padding:16px 18px}
+        .export-btn{background:none;border:1px solid #1e1e1e;border-radius:6px;color:#555;font-size:12px;padding:6px 14px;cursor:pointer;font-family:inherit}
+        .export-btn:hover{color:#aaa;border-color:#2a2a2a}
+        .tracker-card{background:#141414;border:1px solid #1e1e1e;border-radius:10px;padding:18px 20px;margin-bottom:12px}
+        .warner-card{border-color:#2a1f0a}
+        .tc-head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:6px}
+        .tc-label{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1.5px;font-weight:700}
+        .tc-pct{font-size:24px;font-weight:800;line-height:1}
+        .tc-amounts{display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:10px}
+        .tc-amounts .muted{color:#444}
+        .tc-bar{height:6px;background:#1a1a1a;border-radius:3px;overflow:hidden;margin-bottom:8px}
+        .tc-fill{height:100%;border-radius:3px;transition:width .4s}
+        .tc-info{font-size:11px;color:#666;line-height:1.5}
+        .kpi-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:20px 0}
+        .kpi{background:#141414;border:1px solid #1e1e1e;border-radius:9px;padding:14px 16px}
         .kpi-l{font-size:10px;color:#444;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px}
-        .kpi-v{font-size:20px;font-weight:700;line-height:1}
+        .kpi-v{font-size:18px;font-weight:700;line-height:1}
         .kpi-s{font-size:11px;color:#555;margin-top:5px}
-        .pos{color:#6ee7b7!important}.muted{color:#444!important}
-        .section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#444;margin-bottom:12px}
-        .single-item{background:#141414;border:1px solid #1e1e1e;border-radius:10px;display:flex;align-items:center;gap:16px;padding:16px 20px;margin-bottom:8px;cursor:pointer;transition:border-color .2s,background .2s}
+        .section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#444;margin:20px 0 12px}
+        .single-item{background:#141414;border:1px solid #1e1e1e;border-radius:10px;display:flex;align-items:center;gap:16px;padding:14px 18px;margin-bottom:6px;cursor:pointer;transition:all .2s}
         .single-item:hover{border-color:#2a2a2a;background:#181818}
         .si-left{flex:1;min-width:0}
-        .si-title{font-size:15px;font-weight:700;color:#eee;margin-bottom:3px}
+        .si-title{font-size:14px;font-weight:700;color:#eee;margin-bottom:3px}
         .si-meta{font-size:11px;color:#555}
-        .si-progress{width:190px;flex-shrink:0}
-        .si-bar-bg{height:4px;background:#1e1e1e;border-radius:2px;overflow:hidden;margin-bottom:5px}
-        .si-bar-fill{height:100%;border-radius:2px}
-        .si-bar-label{font-size:11px}
-        .si-amounts{text-align:right;width:100px;flex-shrink:0}
-        .si-gen{font-size:15px;font-weight:700;margin-bottom:2px}
-        .si-budget{font-size:10px;color:#555}
+        .si-amounts{text-align:right;flex-shrink:0}
+        .si-gen{font-size:14px;font-weight:700}
+        .si-sub{font-size:10px;color:#444;margin-top:2px}
         .si-caret{color:#2a2a2a;font-size:18px;flex-shrink:0}
-        @media(max-width:600px){.kpi-row{grid-template-columns:1fr 1fr}.si-progress{display:none}}
+        @media(max-width:600px){.kpi-row{grid-template-columns:1fr}}
       `}</style>
     </div>
   )
