@@ -2,21 +2,20 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/router'
 import { supabase } from '../../lib/supabase'
 import { useRate } from '../../lib/rateContext'
-import { ARTISTS, COLORS, fmt, fmtStreams } from '../../lib/artists'
+import { ARTISTS, COLORS, fmtStreams } from '../../lib/artists'
+import { computeRecoupe, computeArtistStats, fmtEur, pctColor } from '../../lib/recoupe'
 import MainNav from '../../components/MainNav'
 import NewProjectModal from '../../components/NewProjectModal'
 import EditProjectModal from '../../components/EditProjectModal'
 
-const ALL_ARTISTS = [...ARTISTS, 'Sherfflazone']
-
 export default function RecoupeIndex() {
   const router = useRouter()
-  const { rate } = useRate()  // ← useRate() au lieu de fetch individuel
+  const { rate } = useRate()
   const [view, setView] = useState('dashboard')
   const [activeArtist, setActiveArtist] = useState(null)
   const [series, setSeries] = useState([])
   const [royalties, setRoyalties] = useState([])
-  const [allArtists, setAllArtists] = useState(ALL_ARTISTS)
+  const [allArtists, setAllArtists] = useState(ARTISTS)
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editSerie, setEditSerie] = useState(null)
@@ -30,22 +29,14 @@ export default function RecoupeIndex() {
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
-
-    // Fetch series + artists en parallèle
     const [{ data: s }, { data: artistsData }] = await Promise.all([
       supabase.from('series').select('*, singles(*, budget_lines(*))').order('created_at'),
       supabase.from('artists').select('name, color').order('created_at'),
     ])
-
     const seriesData = s || []
     setSeries(seriesData)
+    if (artistsData?.length) setAllArtists(artistsData.map(a => a.name))
 
-    // Artistes dynamiques depuis la DB
-    if (artistsData?.length) {
-      setAllArtists(artistsData.map(a => a.name))
-    }
-
-    // Fetch royalties filtrées aux artistes qui ont des projets (perf)
     const artistsWithProjects = [...new Set(seriesData.map(s => s.artist))]
     if (!artistsWithProjects.length) { setRoyalties([]); setLoading(false); return }
 
@@ -54,9 +45,9 @@ export default function RecoupeIndex() {
       const { data, error } = await supabase
         .from('royalties')
         .select('title, artist, amount, currency, qty, month')
-        .in('artist', artistsWithProjects)  // ← filtre par artiste, pas tout charger
+        .in('artist', artistsWithProjects)
         .range(from, from + 999)
-      if (error || !data || !data.length) break
+      if (error || !data?.length) break
       allRoy = allRoy.concat(data)
       if (data.length < 1000) break
       from += 1000
@@ -72,69 +63,34 @@ export default function RecoupeIndex() {
     fetchAll()
   }
 
-  // Convertit un montant de royalties en USD pour la comparaison avec le budget (toujours en USD)
-  function royToUsd(r) {
-    const a = Number(r.amount ?? r.usd ?? 0)
-    if (r.currency === 'EUR') return a / rate
-    return a
-  }
-
+  // Calcule les stats d'une série en utilisant la nouvelle lib
   function getSerieStats(serie) {
     const singles = serie.singles || []
-    let totalBudgetEur = 0, totalUsd = 0, totalQty = 0
-    singles.forEach(s => {
-      totalBudgetEur += s.budget_eur || 0
-      const rows = royalties.filter(r =>
-        r.artist === s.artist &&
-        r.title.toLowerCase() === s.title.toLowerCase()
-      )
-      totalUsd += rows.reduce((sum, r) => sum + royToUsd(r), 0)
-      totalQty += rows.reduce((sum, r) => sum + Number(r.qty || 0), 0)
-    })
-    const budgetUsd = totalBudgetEur / rate
-    const pct = budgetUsd > 0 ? Math.min((totalUsd / budgetUsd) * 100, 100) : 0
-    const remaining = Math.max(budgetUsd - totalUsd, 0)
-    const profit = Math.max(totalUsd - budgetUsd, 0)
-    const afterArtistMgmt = profit * ((100 - serie.artist_rate - serie.mgmt_rate) / 100)
-    const coprodShare = afterArtistMgmt * (serie.coprod_rate / 100)
-    const labelShare  = afterArtistMgmt * (serie.label_rate / 100)
-    return { totalBudgetEur, totalUsd, totalQty, budgetUsd, pct, remaining, profit, coprodShare, labelShare }
+    const allBudgetLines = singles.flatMap(s => s.budget_lines || [])
+    // Toutes les royalties qui matchent les titres de la série
+    const titles = singles.map(s => s.title.toLowerCase())
+    const serieRoyalties = royalties.filter(r =>
+      r.artist === serie.artist && titles.includes(r.title.toLowerCase())
+    )
+    return computeRecoupe(serie, allBudgetLines, serieRoyalties, rate)
   }
 
+  // Stats agrégées par artiste
   function getArtistStats(artist) {
     const ar = series.filter(s => s.artist === artist)
-    let totalBudgetEur = 0, totalUsd = 0, totalQty = 0, profit = 0
-    ar.forEach(serie => {
-      const s = getSerieStats(serie)
-      totalBudgetEur += s.totalBudgetEur
-      totalUsd += s.totalUsd
-      totalQty += s.totalQty
-      profit += s.profit
-    })
-    const budgetUsd = totalBudgetEur / rate
-    const pct = budgetUsd > 0 ? Math.min((totalUsd / budgetUsd) * 100, 100) : 0
-    const remaining = Math.max(budgetUsd - totalUsd, 0)
-    return { totalBudgetEur, totalUsd, totalQty, budgetUsd, pct, remaining, profit, seriesCount: ar.length }
+    const stats = ar.map(s => getSerieStats(s))
+    return computeArtistStats(stats)
   }
 
+  // Stats globales du label
   const labelStats = (() => {
-    let budget = 0, usd = 0, qty = 0, profit = 0, recouped = 0
-    series.forEach(serie => {
-      const s = getSerieStats(serie)
-      budget += s.totalBudgetEur; usd += s.totalUsd; qty += s.totalQty; profit += s.profit
-      if (s.pct >= 100) recouped++
-    })
-    const budgetUsd = budget / rate
-    const pct = budgetUsd > 0 ? Math.min((usd / budgetUsd) * 100, 100) : 0
-    return { budget, budgetUsd, usd, qty, pct, profit, recouped, projectCount: series.length }
+    const stats = series.map(s => getSerieStats(s))
+    return computeArtistStats(stats)
   })()
 
-  function pctColor(pct) {
-    if (pct >= 100) return '#6ee7b7'
-    if (pct >= 60)  return '#f59e0b'
-    if (pct > 0)    return '#f87171'
-    return '#444'
-  }
+  const labelGlobalPct = labelStats.fabricationCost + labelStats.artistAdvance > 0
+    ? Math.min(((labelStats.fabricationRecouped + labelStats.artistAdvanceRecouped) / (labelStats.fabricationCost + labelStats.artistAdvance)) * 100, 100)
+    : 0
 
   const artistSeries = activeArtist ? series.filter(s => s.artist === activeArtist) : []
 
@@ -153,49 +109,56 @@ export default function RecoupeIndex() {
           </div>
         ) : view === 'dashboard' ? (
           <>
+            {/* CARTE LABEL GLOBAL */}
             <div className="label-card">
               <div className="lc-top">
                 <div className="lc-left">
                   <div className="lc-dot" />
                   <span>Avlanche Music · Recoupe</span>
                 </div>
-                <div style={{ fontSize: 11, color: '#555' }}>{labelStats.projectCount} projet{labelStats.projectCount !== 1 ? 's' : ''}</div>
+                <div style={{ fontSize: 11, color: '#555' }}>
+                  {labelStats.seriesCount} projet{labelStats.seriesCount !== 1 ? 's' : ''}
+                </div>
               </div>
               <div className="lc-stats">
                 <div>
-                  <div className="sl">Budget investi</div>
-                  <div className="sv">€{Math.round(labelStats.budget).toLocaleString('fr-FR')}</div>
-                  <div className="ss">≈ ${Math.round(labelStats.budgetUsd).toLocaleString('fr-FR')}</div>
+                  <div className="sl">Budget total investi</div>
+                  <div className="sv">{fmtEur(labelStats.fabricationCost + labelStats.artistAdvance)}</div>
+                  <div className="ss">{fmtEur(labelStats.fabricationCost)} fab + {fmtEur(labelStats.artistAdvance)} avances</div>
                 </div>
                 <div>
                   <div className="sl">Total généré</div>
-                  <div className="sv" style={{ color: '#f59e0b' }}>{fmt(labelStats.usd)}</div>
-                  <div className="ss">{fmtStreams(labelStats.qty)} streams</div>
+                  <div className="sv" style={{ color: '#f59e0b' }}>{fmtEur(labelStats.grossRevenue)}</div>
+                  <div className="ss">{fmtStreams(labelStats.totalQty)} streams</div>
                 </div>
                 <div>
                   <div className="sl">Recoupe globale</div>
-                  <div className="sv" style={{ color: pctColor(labelStats.pct) }}>{labelStats.pct.toFixed(1)}%</div>
-                  <div className="ss">{fmt(Math.max(labelStats.budgetUsd - labelStats.usd, 0))} restants</div>
+                  <div className="sv" style={{ color: pctColor(labelGlobalPct) }}>{labelGlobalPct.toFixed(1)}%</div>
+                  <div className="ss">{labelStats.recoupedCount} recoupé{labelStats.recoupedCount !== 1 ? 's' : ''}</div>
                 </div>
                 <div>
                   <div className="sl">Bénéfice net</div>
-                  <div className="sv" style={{ color: labelStats.profit > 0 ? '#6ee7b7' : '#444' }}>
-                    {labelStats.profit > 0 ? fmt(labelStats.profit) : '$0'}
+                  <div className="sv" style={{ color: labelStats.labelNet > 0 ? '#6ee7b7' : '#444' }}>
+                    {labelStats.labelNet > 0 ? fmtEur(labelStats.labelNet) : '€0'}
                   </div>
-                  <div className="ss">{labelStats.recouped} recoupé{labelStats.recouped !== 1 ? 's' : ''}</div>
+                  <div className="ss">+ {fmtEur(labelStats.coprodNet)} coprod</div>
                 </div>
               </div>
-              {labelStats.budgetUsd > 0 && (
+              {(labelStats.fabricationCost + labelStats.artistAdvance) > 0 && (
                 <div className="prog-bg" style={{ marginTop: 14 }}>
-                  <div className="prog-fill" style={{ width: `${labelStats.pct}%`, background: 'linear-gradient(90deg,#f97316,#a78bfa)' }} />
+                  <div className="prog-fill" style={{ width: `${labelGlobalPct}%`, background: 'linear-gradient(90deg,#f97316,#a78bfa)' }} />
                 </div>
               )}
             </div>
 
+            {/* GRILLE ARTISTES */}
             <div className="artist-grid">
               {allArtists.map(artist => {
                 const s = getArtistStats(artist)
                 const color = COLORS[artist] || '#888'
+                const totalBudget = s.fabricationCost + s.artistAdvance
+                const totalRecouped = s.fabricationRecouped + s.artistAdvanceRecouped
+                const pct = totalBudget > 0 ? Math.min((totalRecouped / totalBudget) * 100, 100) : 0
                 return (
                   <div key={artist} className="artist-card" onClick={() => { setActiveArtist(artist); setView('artist') }}>
                     <div className="ac-top">
@@ -211,8 +174,8 @@ export default function RecoupeIndex() {
                       <div className="ac-right">
                         {s.seriesCount > 0 ? (
                           <>
-                            <div className="ac-pct" style={{ color: pctColor(s.pct) }}>{s.pct.toFixed(1)}%</div>
-                            <div className="ac-pct-sub">{s.pct >= 100 ? 'recoupé ✓' : 'de recoupe'}</div>
+                            <div className="ac-pct" style={{ color: pctColor(pct) }}>{pct.toFixed(1)}%</div>
+                            <div className="ac-pct-sub">{pct >= 100 ? 'recoupé ✓' : 'de recoupe'}</div>
                           </>
                         ) : (
                           <div className="ac-pct" style={{ color: '#333' }}>—</div>
@@ -222,20 +185,18 @@ export default function RecoupeIndex() {
                     {s.seriesCount > 0 && (
                       <>
                         <div className="prog-bg">
-                          <div className="prog-fill" style={{ width: `${s.pct}%`, background: s.pct >= 100 ? `linear-gradient(90deg,${color},#6ee7b7)` : color }} />
+                          <div className="prog-fill" style={{ width: `${pct}%`, background: pct >= 100 ? `linear-gradient(90deg,${color},#6ee7b7)` : color }} />
                         </div>
                         <div className="ac-stats">
                           <div>
                             <div className="sl">Budget</div>
-                            <div className="sv" style={{ fontSize: 13 }}>€{Math.round(s.totalBudgetEur).toLocaleString('fr-FR')}</div>
-                            <div className="ss">≈ ${Math.round(s.budgetUsd).toLocaleString('fr-FR')}</div>
+                            <div className="sv" style={{ fontSize: 13 }}>{fmtEur(totalBudget)}</div>
                           </div>
                           <div>
-                            <div className="sl">{s.profit > 0 ? 'Bénéfice' : 'Généré'}</div>
-                            <div className="sv" style={{ fontSize: 13, color: s.profit > 0 ? '#6ee7b7' : '#f59e0b' }}>
-                              {s.profit > 0 ? `+${fmt(s.profit)}` : fmt(s.totalUsd)}
+                            <div className="sl">{s.labelNet > 0 ? 'Bénéfice' : 'Généré'}</div>
+                            <div className="sv" style={{ fontSize: 13, color: s.labelNet > 0 ? '#6ee7b7' : '#f59e0b' }}>
+                              {s.labelNet > 0 ? `+${fmtEur(s.labelNet)}` : fmtEur(s.grossRevenue)}
                             </div>
-                            <div className="ss">{fmtStreams(s.totalQty)} streams</div>
                           </div>
                         </div>
                       </>
@@ -257,25 +218,25 @@ export default function RecoupeIndex() {
             <div className="breadcrumb">
               <span className="bc-link" onClick={() => setView('dashboard')}>Recoupe</span>
               <span className="bc-sep">›</span>
-              <span className="bc-current">
-                <span className="ac-dot" style={{ background: COLORS[activeArtist] || '#888', display: 'inline-block', marginRight: 6, verticalAlign: 'middle' }} />
-                {activeArtist}
-              </span>
+              <span className="bc-current">{activeArtist}</span>
             </div>
 
             {artistSeries.length > 0 && (() => {
               const as = getArtistStats(activeArtist)
               const color = COLORS[activeArtist] || '#888'
+              const totalBudget = as.fabricationCost + as.artistAdvance
+              const totalRecouped = as.fabricationRecouped + as.artistAdvanceRecouped
+              const pct = totalBudget > 0 ? Math.min((totalRecouped / totalBudget) * 100, 100) : 0
               return (
                 <div className="label-card" style={{ cursor: 'default' }}>
                   <div className="lc-stats">
-                    <div><div className="sl">Budget investi</div><div className="sv">€{Math.round(as.totalBudgetEur).toLocaleString('fr-FR')}</div><div className="ss">≈ ${Math.round(as.budgetUsd).toLocaleString('fr-FR')}</div></div>
-                    <div><div className="sl">Total généré</div><div className="sv" style={{ color: '#f59e0b' }}>{fmt(as.totalUsd)}</div><div className="ss">{fmtStreams(as.totalQty)} streams</div></div>
-                    <div><div className="sl">Recoupe globale</div><div className="sv" style={{ color: pctColor(as.pct) }}>{as.pct.toFixed(1)}%</div><div className="ss">{fmt(as.remaining)} restants</div></div>
-                    <div><div className="sl">Bénéfice</div><div className="sv" style={{ color: as.profit > 0 ? '#6ee7b7' : '#444' }}>{as.profit > 0 ? fmt(as.profit) : '$0'}</div></div>
+                    <div><div className="sl">Budget investi</div><div className="sv">{fmtEur(totalBudget)}</div><div className="ss">{fmtEur(as.fabricationCost)} fab + {fmtEur(as.artistAdvance)} avance</div></div>
+                    <div><div className="sl">Total généré</div><div className="sv" style={{ color: '#f59e0b' }}>{fmtEur(as.grossRevenue)}</div><div className="ss">{fmtStreams(as.totalQty)} streams</div></div>
+                    <div><div className="sl">Recoupe</div><div className="sv" style={{ color: pctColor(pct) }}>{pct.toFixed(1)}%</div></div>
+                    <div><div className="sl">Bénéfice</div><div className="sv" style={{ color: as.labelNet > 0 ? '#6ee7b7' : '#444' }}>{as.labelNet > 0 ? fmtEur(as.labelNet) : '€0'}</div></div>
                   </div>
                   <div className="prog-bg" style={{ marginTop: 14 }}>
-                    <div className="prog-fill" style={{ width: `${as.pct}%`, background: as.pct >= 100 ? `linear-gradient(90deg,${color},#6ee7b7)` : color }} />
+                    <div className="prog-fill" style={{ width: `${pct}%`, background: pct >= 100 ? `linear-gradient(90deg,${color},#6ee7b7)` : color }} />
                   </div>
                 </div>
               )
@@ -292,32 +253,37 @@ export default function RecoupeIndex() {
             ) : artistSeries.map(serie => {
               const s = getSerieStats(serie)
               const color = COLORS[serie.artist] || '#f59e0b'
+              const totalBudget = s.fabricationCost + s.artistAdvance
+              const totalRecouped = s.fabricationRecouped + s.artistAdvanceRecouped
+              const pct = totalBudget > 0 ? Math.min((totalRecouped / totalBudget) * 100, 100) : 0
               return (
                 <div key={serie.id} className="project-card" onClick={() => router.push(`/recoupe/${serie.id}`)}>
                   <div className="pc-top">
                     <div className="pc-left">
-                      <div className="pc-type">{serie.singles?.length === 1 ? 'Single' : 'Série de singles'} · {serie.artist}</div>
+                      <div className="pc-type">
+                        {serie.singles?.length === 1 ? 'Single' : 'Série · ' + (serie.singles?.length || 0) + ' titres'} · {serie.artist}
+                        {s.isWarner && <span style={{ marginLeft: 8, padding: '1px 6px', borderRadius: 3, background: '#1a1000', color: '#f59e0b', fontSize: 9 }}>WARNER</span>}
+                      </div>
                       <div className="pc-name">{serie.name}</div>
                       <div className="pc-meta">
-                        {serie.singles?.length || 0} single{(serie.singles?.length || 0) > 1 ? 's' : ''}
-                        {serie.coprod_name && ` · co-prod ${serie.coprod_name}`}
-                        {' · '}Contrat {serie.artist_rate}% / {serie.label_rate}/{serie.coprod_rate}
+                        Contrat artiste {serie.artist_rate}%
+                        {serie.coprod_name && ` · co-prod ${serie.coprod_name} ${serie.coprod_rate}%`}
                       </div>
                     </div>
                     <div className="pc-right">
-                      <div className="pc-pct" style={{ color: pctColor(s.pct) }}>{s.pct.toFixed(1)}%</div>
-                      <div className="pc-pct-sub">{s.pct >= 100 ? 'recoupé ✓' : 'de recoupe'}</div>
+                      <div className="pc-pct" style={{ color: pctColor(pct) }}>{pct.toFixed(1)}%</div>
+                      <div className="pc-pct-sub">{s.phase === 'profit' ? 'recoupé ✓' : s.phase === 'distrib' ? 'recoupe distrib' : 'de recoupe'}</div>
                     </div>
                   </div>
                   <div className="prog-bg">
-                    <div className="prog-fill" style={{ width: `${s.pct}%`, background: s.pct >= 100 ? `linear-gradient(90deg,${color},#6ee7b7)` : color }} />
+                    <div className="prog-fill" style={{ width: `${pct}%`, background: pct >= 100 ? `linear-gradient(90deg,${color},#6ee7b7)` : color }} />
                   </div>
                   <div className="pc-stats">
-                    <div><div className="pcs-label">Budget investi</div><div className="pcs-val">€{Math.round(s.totalBudgetEur).toLocaleString('fr-FR')}</div><div className="pcs-sub">≈ ${Math.round(s.budgetUsd).toLocaleString('fr-FR')}</div></div>
-                    <div><div className="pcs-label">Total généré</div><div className="pcs-val pos">{fmt(s.totalUsd)}</div><div className="pcs-sub">{fmtStreams(s.totalQty)} streams</div></div>
-                    {s.pct >= 100
-                      ? <div><div className="pcs-label">Bénéfice net</div><div className="pcs-val" style={{ color: '#6ee7b7' }}>{fmt(s.profit)}</div>{serie.coprod_name && <div className="pcs-sub" style={{ color: '#eab308' }}>{serie.coprod_name} : {fmt(s.coprodShare)}</div>}</div>
-                      : <div><div className="pcs-label">Reste à recouper</div><div className="pcs-val warn">{fmt(s.remaining)}</div>{serie.coprod_name && <div className="pcs-sub">{serie.coprod_name} : $0 perçu</div>}</div>
+                    <div><div className="pcs-label">Budget investi</div><div className="pcs-val">{fmtEur(totalBudget)}</div></div>
+                    <div><div className="pcs-label">Total généré</div><div className="pcs-val pos">{fmtEur(s.grossRevenue)}</div><div className="pcs-sub">{fmtStreams(s.totalQty)} streams</div></div>
+                    {s.phase === 'profit'
+                      ? <div><div className="pcs-label">Bénéfice net</div><div className="pcs-val" style={{ color: '#6ee7b7' }}>{fmtEur(s.labelNet)}</div>{serie.coprod_name && <div className="pcs-sub" style={{ color: '#eab308' }}>{serie.coprod_name} : {fmtEur(s.coprodNet)}</div>}</div>
+                      : <div><div className="pcs-label">Reste à recouper</div><div className="pcs-val warn">{fmtEur(Math.max(totalBudget - totalRecouped, 0))}</div></div>
                     }
                   </div>
                   <div className="pc-footer">
@@ -336,14 +302,13 @@ export default function RecoupeIndex() {
       </div>
 
       {editSerie && <EditProjectModal serie={editSerie} onClose={() => setEditSerie(null)} onSuccess={fetchAll} />}
-      {showModal && <NewProjectModal defaultArtist={activeArtist || 'Magie!'} onClose={() => setShowModal(false)} onSuccess={fetchAll} />}
+      {showModal && <NewProjectModal defaultArtist={activeArtist || allArtists[0]} onClose={() => setShowModal(false)} onSuccess={fetchAll} />}
 
       <style jsx>{`
         .breadcrumb{font-size:11px;color:#444;margin-bottom:20px;display:flex;align-items:center;gap:6px}
         .bc-link{color:#555;cursor:pointer}.bc-link:hover{color:#aaa}
-        .bc-sep{color:#333}.bc-current{color:#888;display:flex;align-items:center}
-        .label-card{background:#141414;border:1px solid #1e1e1e;border-radius:12px;padding:18px 20px;margin-bottom:16px;cursor:pointer;transition:border-color .2s}
-        .label-card:hover{border-color:#2a2a2a}
+        .bc-sep{color:#333}.bc-current{color:#888}
+        .label-card{background:#141414;border:1px solid #1e1e1e;border-radius:12px;padding:18px 20px;margin-bottom:16px}
         .lc-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
         .lc-left{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:700;color:#eee}
         .lc-dot{width:8px;height:8px;border-radius:50%;background:linear-gradient(135deg,#f97316,#a78bfa);flex-shrink:0}
