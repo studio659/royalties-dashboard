@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
 import { supabase } from '../../../lib/supabase'
 import { useRate } from '../../../lib/rateContext'
-import { COLORS, fmt, fmtStreams } from '../../../lib/artists'
+import { COLORS, fmtStreams } from '../../../lib/artists'
+import { computeRecoupe, fmtEur, pctColor, phaseLabel, toEur } from '../../../lib/recoupe'
 import MainNav from '../../../components/MainNav'
 
 export default function SingleDetail() {
@@ -37,16 +38,15 @@ export default function SingleDetail() {
     setSingle(s)
     setSerie(s.series)
 
-    // Fetch royalties filtrées par artiste ET titre directement
     let allRoy = [], from = 0
     while (true) {
       const { data, error } = await supabase
         .from('royalties')
         .select('month, amount, currency, qty, store, title')
         .eq('artist', s.artist)
-        .ilike('title', s.title)  // filtre par titre côté DB
+        .ilike('title', s.title)
         .range(from, from + 999)
-      if (error || !data || data.length === 0) break
+      if (error || !data?.length) break
       allRoy = allRoy.concat(data)
       if (data.length < 1000) break
       from += 1000
@@ -56,12 +56,6 @@ export default function SingleDetail() {
     setLoading(false)
   }
 
-  function royToUsd(r) {
-    const a = Number(r.amount ?? r.usd ?? 0)
-    if (r.currency === 'EUR') return a / rate
-    return a
-  }
-
   if (loading || !single) return (
     <div className="app">
       <MainNav showBack onBack={() => router.back()} />
@@ -69,56 +63,59 @@ export default function SingleDetail() {
     </div>
   )
 
+  // ⚠️ ICI : pour un single dans une série multi-titres, on calcule la recoupe
+  // sur ce single uniquement (sa fabrication, sa contribution aux revenus).
+  // Pour ça on construit un "pseudo-projet" avec uniquement ses budget_lines
+  // et l'avance artiste proportionnée si la série a plus d'un titre.
+  const singleProject = {
+    ...serie,
+    artist_advance: serie?.singles_count > 1
+      ? (serie.artist_advance || 0) / serie.singles_count
+      : (serie?.artist_advance || 0),
+    distrib_advance: null, // l'avance distrib est au niveau série, pas single
+  }
+  const stats = computeRecoupe(singleProject, single.budget_lines || [], royaltyRows, rate)
+
+  const totalEur = stats.grossRevenue
   const budgetLines = single.budget_lines || []
-  const totalUsd = royaltyRows.reduce((s, r) => s + royToUsd(r), 0)
-  const totalQty = royaltyRows.reduce((s, r) => s + Number(r.qty || 0), 0)
-  const budgetUsd = (single.budget_eur || 0) / rate
-  const pct = budgetUsd > 0 ? Math.min((totalUsd / budgetUsd) * 100, 100) : 0
-  const remaining = Math.max(budgetUsd - totalUsd, 0)
-  const pctColor = pct >= 90 ? '#6ee7b7' : pct >= 50 ? '#f59e0b' : '#f87171'
+  const fabricationCost = stats.fabricationCost
+  const totalBudget = fabricationCost + stats.artistAdvance
 
-  const artistRate = single.artist_rate ?? serie?.artist_rate ?? 12
-  const coprodRate = single.coprod_rate ?? serie?.coprod_rate ?? 40
-  const labelRate  = single.label_rate  ?? serie?.label_rate  ?? 60
-  const mgmtRate   = single.mgmt_rate   ?? serie?.mgmt_rate   ?? 5
-  const coprodName = single.coprod_name ?? serie?.coprod_name ?? ''
+  const artistRate  = serie?.artist_rate || 0
+  const coprodRate  = serie?.coprod_rate || 0
+  const labelRate   = serie?.label_rate  || 100
+  const coprodName  = serie?.coprod_name || ''
 
-  const artistShare = totalUsd * (artistRate / 100)
-  const mgmtShare   = totalUsd * (mgmtRate / 100)
-  const labelShare  = totalUsd - artistShare - mgmtShare
-
-  const afterArtistMgmtPct = (100 - artistRate - mgmtRate)
-  const labelBenefPct  = afterArtistMgmtPct * (labelRate / 100)
-  const coprodBenefPct = afterArtistMgmtPct * (coprodRate / 100)
-
-  const byMonth = {}
-  royaltyRows.forEach(r => { byMonth[r.month] = (byMonth[r.month] || 0) + royToUsd(r) })
-  const months = Object.keys(byMonth).sort()
-  const last3 = months.slice(-3)
-  const avg = last3.length > 0 ? last3.reduce((s, m) => s + byMonth[m], 0) / last3.length : 0
-  const hasEnoughData = months.length >= 3
-  const monthsLeft = hasEnoughData && avg > 0 && remaining > 0 ? Math.ceil(remaining / avg) : null
-
-  const byPlat = {}
-  royaltyRows.forEach(r => { byPlat[r.store] = (byPlat[r.store] || 0) + royToUsd(r) })
-  const topPlats = Object.entries(byPlat).sort((a, b) => b[1] - a[1]).slice(0, 5)
+  // Évolution mensuelle
+  const byMonth = stats.byMonth
+  const months = stats.months
   const maxMonthly = Math.max(...Object.values(byMonth), 1)
 
+  // Top plateformes
+  const byPlat = {}
+  royaltyRows.forEach(r => {
+    if (!byPlat[r.store]) byPlat[r.store] = 0
+    byPlat[r.store] += toEur(r, rate)
+  })
+  const topPlats = Object.entries(byPlat).sort((a, b) => b[1] - a[1]).slice(0, 5)
+
   function exportCSV() {
-    const rows = [['Mois','Revenus $','% du budget recoupé']]
+    const rows = [['Mois', 'Revenus €', '% du budget recoupé']]
     months.forEach(m => {
-      rows.push([m, (byMonth[m]||0).toFixed(2), ((byMonth[m]||0)/budgetUsd*100).toFixed(1)])
+      rows.push([m, (byMonth[m] || 0).toFixed(2), totalBudget > 0 ? ((byMonth[m] || 0) / totalBudget * 100).toFixed(1) : '0'])
     })
-    rows.push(['','',''])
-    rows.push(['BUDGET LIGNES','€',''])
+    rows.push(['', '', ''])
+    rows.push(['BUDGET LIGNES', '€', ''])
     budgetLines.forEach(l => rows.push([l.label, l.amount_eur, '']))
     const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `recoupe_${single.title.replace(/[^a-z0-9]/gi,'_')}.csv`
+    a.download = `recoupe_${single.title.replace(/[^a-z0-9]/gi, '_')}.csv`
     a.click()
   }
+
+  const color = COLORS[single.artist] || '#a78bfa'
 
   return (
     <div className="app">
@@ -138,80 +135,103 @@ export default function SingleDetail() {
           <div className="sh-title">{single.title}</div>
           <div className="sh-meta">
             {single.release_date && new Date(single.release_date).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}
-            {totalQty > 0 && ` · ${fmtStreams(totalQty)} streams`}
+            {stats.totalQty > 0 && ` · ${fmtStreams(stats.totalQty)} streams`}
             {coprodName && ` · co-prod ${coprodName}`}
           </div>
         </div>
 
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <button onClick={exportCSV} className="export-btn">↓ Exporter CSV</button>
+        </div>
+
+        {/* TRACKER PRINCIPAL */}
         <div className="tracker-card">
           <div className="tc-top">
             <div>
-              <div className="tc-label">Recoupe</div>
-              <div className="tc-pct" style={{ color: pctColor }}>{pct.toFixed(1)}%</div>
+              <div className="tc-label">Phase</div>
+              <div className="tc-phase" style={{ color: pctColor(stats.fabricationPct) }}>{phaseLabel(stats.phase)}</div>
             </div>
             <div className="tc-right">
-              <div className="tc-gen">{fmt(totalUsd)} générés</div>
-              <div className="tc-bud">sur €{Math.round(single.budget_eur || 0).toLocaleString('fr-FR')} investis (≈ {fmt(budgetUsd)})</div>
-              <div className="tc-reste" style={{ color: remaining > 0 ? '#f59e0b' : '#6ee7b7' }}>
-                {remaining > 0
-                  ? `⚡ Il reste ${fmt(remaining)}${monthsLeft ? ` · ~${monthsLeft} mois` : !hasEnoughData ? ' · données insuffisantes (<3 mois)' : ''}`
-                  : '✓ Recoupé !'}
-              </div>
+              <div className="tc-gen">{fmtEur(totalEur)} générés</div>
+              <div className="tc-bud">budget total {fmtEur(totalBudget)}</div>
             </div>
-          </div>
-          <div className="tc-bar">
-            <div className="tc-fill" style={{
-              width: `${pct}%`,
-              background: pct >= 90 ? 'linear-gradient(90deg,#f97316,#6ee7b7)' : '#f97316'
-            }} />
-          </div>
-          <div className="tc-foot">
-            <span>$0</span>
-            <span style={{ color: pctColor }}>● {pct.toFixed(1)}%</span>
-            <span>{fmt(budgetUsd)} → {coprodName || 'co-prod'} entre en jeu</span>
           </div>
         </div>
 
+        {/* RECOUPES PARALLÈLES */}
         <div className="two-col">
+          {stats.artistAdvance > 0 && (
+            <div className="mini-tracker">
+              <div className="mt-label">Avance artiste · {fmtEur(stats.artistAdvance)}</div>
+              <div className="mt-bar">
+                <div className="mt-fill" style={{ width: `${stats.artistAdvancePct}%`, background: stats.artistAdvanceDone ? 'linear-gradient(90deg,#a78bfa,#6ee7b7)' : '#a78bfa' }} />
+              </div>
+              <div className="mt-info">
+                <span style={{ color: pctColor(stats.artistAdvancePct), fontWeight: 700 }}>{stats.artistAdvancePct.toFixed(1)}%</span>
+                <span>{fmtEur(stats.artistAdvanceRecouped)} / {fmtEur(stats.artistAdvance)}</span>
+              </div>
+              {stats.artistAdvanceDone && (
+                <div className="mt-cash" style={{ color: '#6ee7b7' }}>
+                  ✓ {single.artist} touche {fmtEur(stats.artistCash)} en cash
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="mini-tracker">
+            <div className="mt-label">Fabrication · {fmtEur(fabricationCost)}</div>
+            <div className="mt-bar">
+              <div className="mt-fill" style={{ width: `${stats.fabricationPct}%`, background: stats.fabricationDone ? 'linear-gradient(90deg,#f97316,#6ee7b7)' : '#f97316' }} />
+            </div>
+            <div className="mt-info">
+              <span style={{ color: pctColor(stats.fabricationPct), fontWeight: 700 }}>{stats.fabricationPct.toFixed(1)}%</span>
+              <span>{fmtEur(stats.fabricationRecouped)} / {fmtEur(fabricationCost)}</span>
+            </div>
+            {stats.fabricationDone && (
+              <div className="mt-cash" style={{ color: '#6ee7b7' }}>
+                ✓ Bénéfice : {fmtEur(stats.labelProfit)}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* BUDGET DETAIL + RÉPARTITION */}
+        <div className="two-col" style={{ marginTop: 14 }}>
           <div className="inner-card">
-            <div className="ic-title">Budget · €{Math.round(single.budget_eur || 0).toLocaleString('fr-FR')}</div>
+            <div className="ic-title">Budget fabrication · {fmtEur(fabricationCost)}</div>
             {budgetLines.length === 0 ? (
               <div style={{ color: '#444', fontSize: 12, padding: '12px 0' }}>Aucune ligne de budget</div>
             ) : budgetLines.map(line => (
               <div key={line.id} className="bl-row">
                 <span className="bl-name">{line.label}</span>
-                <span className="bl-amount">€{Math.round(line.amount_eur).toLocaleString('fr-FR')}</span>
-                <span className={`bl-status ${line.status === 'paid' ? 's-paid' : 's-pending'}`}>
-                  {line.status === 'paid' ? 'payé' : 'en attente'}
-                </span>
+                <span className="bl-amount">{fmtEur(line.amount_eur)}</span>
               </div>
             ))}
-            <div className="bl-total"><span>Total</span><span>€{Math.round(single.budget_eur || 0).toLocaleString('fr-FR')}</span></div>
+            <div className="bl-total"><span>Total</span><span>{fmtEur(fabricationCost)}</span></div>
           </div>
 
-          <div>
-            <div className="inner-card" style={{ marginBottom: 12 }}>
-              <div className="ic-title">
-                Ce que chacun a perçu
-                <span className="ic-badge badge-recoupe">Phase recoupe · en cours</span>
-              </div>
-              <PartRow name={`${single.artist} (${artistRate}%)`} color={COLORS[single.artist] || '#a78bfa'} pct={artistRate} val={fmt(artistShare)} valColor="#6ee7b7" />
-              <PartRow name={`Avlanche gestion (${mgmtRate}%)`} color="#6366f1" pct={mgmtRate} val={fmt(mgmtShare)} valColor="#6ee7b7" />
-              <PartRow name={`Avlanche recoupe (${100-artistRate-mgmtRate}%)`} color="#f97316" pct={100-artistRate-mgmtRate} val={fmt(labelShare)} valColor="#6ee7b7" barLabel={`${fmt(labelShare)} → remboursement`} />
-              {coprodName && <PartRow name={coprodName} color="#2a2a2a" pct={0} val="$0" valColor="#444" isEmpty />}
-            </div>
-            <div className="inner-card">
-              <div className="ic-title">Après recoupe <span className="ic-badge badge-benef">Phase bénéfice</span></div>
-              <PartRow name={`${single.artist} (${artistRate}%)`} color={COLORS[single.artist] || '#a78bfa'} pct={artistRate} val={`${artistRate}%`} valColor="#666" />
-              <PartRow name={`Avlanche gestion (${mgmtRate}%)`} color="#6366f1" pct={mgmtRate} val={`${mgmtRate}%`} valColor="#666" />
-              <PartRow name={`Avlanche label (${labelBenefPct.toFixed(1)}%)`} color="#f97316" pct={labelBenefPct} val={`${labelBenefPct.toFixed(1)}%`} valColor="#666" />
-              {coprodName && <PartRow name={`${coprodName} (${coprodBenefPct.toFixed(1)}%)`} color="#eab308" pct={coprodBenefPct} val={`${coprodBenefPct.toFixed(1)}%`} valColor="#eab308" />}
+          <div className="inner-card">
+            <div className="ic-title">Répartition après recoupe</div>
+            <PartRow name={`${single.artist}`} pct={artistRate} color={color} val={`${artistRate}%`} valColor="#aaa" />
+            {coprodName ? (
+              <>
+                <PartRow name="Avlanche label" pct={labelRate} color="#f97316" val={`${labelRate}% du restant`} valColor="#aaa" />
+                <PartRow name={coprodName} pct={coprodRate} color="#eab308" val={`${coprodRate}% du restant`} valColor="#eab308" />
+              </>
+            ) : (
+              <PartRow name="Avlanche label" pct={100 - artistRate} color="#f97316" val={`${100 - artistRate}%`} valColor="#aaa" />
+            )}
+            <div className="rep-info">
+              {stats.profitsAvailable
+                ? `Bénéfice actuel : ${fmtEur(stats.labelNet)} label${coprodName ? ` · ${fmtEur(stats.coprodNet)} ${coprodName}` : ''}`
+                : 'En cours de recoupe — pas encore de bénéfice à répartir'}
             </div>
           </div>
         </div>
 
+        {/* ÉVOLUTION MENSUELLE */}
         {months.length > 0 && (
-          <div className="inner-card" style={{ marginBottom: 12 }}>
+          <div className="inner-card" style={{ marginTop: 14 }}>
             <div className="ic-title">Évolution mensuelle</div>
             {months.map(m => {
               const v = byMonth[m]
@@ -220,34 +240,35 @@ export default function SingleDetail() {
                 <div key={m} className="sim-row">
                   <div className="sim-month">{m}</div>
                   <div className="sim-bar-bg">
-                    <div className="sim-bar" style={{ width: `${w}%`, background: '#f97316' }}>{fmt(v)}</div>
+                    <div className="sim-bar" style={{ width: `${w}%`, background: '#f97316' }}>{fmtEur(v)}</div>
                   </div>
-                  <div className="sim-pct">{((v / budgetUsd) * 100).toFixed(1)}%</div>
+                  <div className="sim-pct">{totalBudget > 0 ? ((v / totalBudget) * 100).toFixed(1) : 0}%</div>
                 </div>
               )
             })}
-            {remaining > 0 && avg > 0 && (
+            {!stats.fabricationDone && stats.monthlyAvg > 0 && stats.hasEnoughData && (
               <div className="sim-row sim-est">
                 <div className="sim-month" style={{ color: '#f59e0b' }}>prochain</div>
                 <div className="sim-bar-bg">
-                  <div className="sim-bar" style={{ width: `${Math.min(avg/maxMonthly*100,100).toFixed(1)}%`, background: '#f59e0b55', border: '1px dashed #f59e0b66' }}>≈ {fmt(avg)}</div>
+                  <div className="sim-bar" style={{ width: `${Math.min(stats.monthlyAvg / maxMonthly * 100, 100).toFixed(1)}%`, background: '#f59e0b55', border: '1px dashed #f59e0b66' }}>≈ {fmtEur(stats.monthlyAvg)}</div>
                 </div>
-                <div className="sim-pct" style={{ color: '#f59e0b' }}>estimé</div>
+                <div className="sim-pct" style={{ color: '#f59e0b' }}>est.</div>
               </div>
             )}
           </div>
         )}
 
+        {/* TOP PLATEFORMES */}
         {topPlats.length > 0 && (
-          <div className="inner-card">
+          <div className="inner-card" style={{ marginTop: 14 }}>
             <div className="ic-title">Top plateformes</div>
             {topPlats.map(([plat, val]) => (
               <div key={plat} className="sim-row">
-                <div className="sim-month" style={{ width: 120 }}>{plat.length > 14 ? plat.slice(0,12)+'…' : plat}</div>
+                <div className="sim-month" style={{ width: 120 }}>{plat.length > 14 ? plat.slice(0, 12) + '…' : plat}</div>
                 <div className="sim-bar-bg">
-                  <div className="sim-bar" style={{ width: `${(val/topPlats[0][1]*100).toFixed(1)}%`, background: '#f97316' }}>{fmt(val)}</div>
+                  <div className="sim-bar" style={{ width: `${(val / topPlats[0][1] * 100).toFixed(1)}%`, background: '#f97316' }}>{fmtEur(val)}</div>
                 </div>
-                <div className="sim-pct">{((val/totalUsd)*100).toFixed(0)}%</div>
+                <div className="sim-pct">{((val / totalEur) * 100).toFixed(0)}%</div>
               </div>
             ))}
           </div>
@@ -258,60 +279,52 @@ export default function SingleDetail() {
         .breadcrumb{font-size:11px;color:#444;margin-bottom:20px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
         .bc-link{color:#555;cursor:pointer}.bc-link:hover{color:#aaa}
         .bc-sep{color:#333}.bc-current{color:#888}
-        .single-hero{margin-bottom:22px}
+        .single-hero{margin-bottom:18px}
         .sh-type{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px}
         .sh-title{font-size:22px;font-weight:700;margin-bottom:4px}
         .sh-meta{font-size:12px;color:#555}
-        .tracker-card{background:#141414;border:1px solid #1e1e1e;border-radius:10px;padding:22px;margin-bottom:16px}
-        .tc-label{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
-        .tc-top{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px}
-        .tc-pct{font-size:48px;font-weight:800;line-height:1}
+        .export-btn{background:none;border:1px solid #1e1e1e;border-radius:6px;color:#555;font-size:12px;padding:6px 14px;cursor:pointer;font-family:inherit}
+        .tracker-card{background:#141414;border:1px solid #1e1e1e;border-radius:10px;padding:18px 22px;margin-bottom:14px}
+        .tc-top{display:flex;justify-content:space-between;align-items:flex-end}
+        .tc-label{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:4px}
+        .tc-phase{font-size:18px;font-weight:700}
         .tc-right{text-align:right}
-        .tc-gen{font-size:18px;font-weight:700;color:#eee;margin-bottom:3px}
-        .tc-bud{font-size:12px;color:#555;margin-bottom:3px}
-        .tc-reste{font-size:12px;font-weight:600}
-        .tc-bar{height:8px;background:#1e2e1e;border-radius:4px;overflow:hidden;margin-bottom:8px}
-        .tc-fill{height:100%;border-radius:4px}
-        .tc-foot{display:flex;justify-content:space-between;font-size:10px;color:#333}
-        .two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px}
-        .inner-card{background:#141414;border:1px solid #1e1e1e;border-radius:9px;padding:16px}
-        .ic-title{font-size:10px;color:#444;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-        .ic-badge{font-size:9px;padding:2px 7px;border-radius:10px}
-        .badge-recoupe{background:#1a1000;color:#f59e0b}
-        .badge-benef{background:#0a1a0a;color:#6ee7b7}
-        .bl-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #191919;font-size:12px}
+        .tc-gen{font-size:18px;font-weight:700;color:#eee;margin-bottom:2px}
+        .tc-bud{font-size:11px;color:#555}
+        .two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+        @media(max-width:600px){.two-col{grid-template-columns:1fr}}
+        .mini-tracker{background:#141414;border:1px solid #1e1e1e;border-radius:9px;padding:14px 16px}
+        .mt-label{font-size:11px;color:#888;font-weight:700;margin-bottom:8px}
+        .mt-bar{height:6px;background:#1a1a1a;border-radius:3px;overflow:hidden;margin-bottom:6px}
+        .mt-fill{height:100%;border-radius:3px;transition:width .4s}
+        .mt-info{display:flex;justify-content:space-between;font-size:11px;color:#666;margin-bottom:6px}
+        .mt-cash{font-size:11px;font-weight:600;margin-top:4px}
+        .inner-card{background:#141414;border:1px solid #1e1e1e;border-radius:9px;padding:14px 16px}
+        .ic-title{font-size:10px;color:#444;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;font-weight:700}
+        .bl-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #191919;font-size:12px}
         .bl-name{flex:1;color:#bbb}
         .bl-amount{font-weight:600;color:#eee;flex-shrink:0}
-        .bl-status{font-size:9px;padding:2px 7px;border-radius:3px;flex-shrink:0}
-        .s-paid{background:#0a1a0a;color:#6ee7b7}
-        .s-pending{background:#1a1000;color:#f59e0b}
-        .bl-total{display:flex;justify-content:space-between;padding-top:10px;margin-top:6px;border-top:1px solid #222;font-size:13px;font-weight:700}
-        .sim-row{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+        .bl-total{display:flex;justify-content:space-between;padding-top:10px;margin-top:6px;border-top:1px solid #222;font-size:13px;font-weight:700;color:#f97316}
+        .rep-info{margin-top:10px;font-size:11px;color:#555;line-height:1.5;padding-top:10px;border-top:1px solid #1a1a1a}
+        .sim-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
         .sim-month{width:60px;font-size:11px;color:#666;flex-shrink:0}
         .sim-bar-bg{flex:1;height:18px;background:#1a1a1a;border-radius:3px;overflow:hidden}
         .sim-bar{height:100%;border-radius:3px;display:flex;align-items:center;padding:0 7px;font-size:10px;font-weight:700;color:#fff;white-space:nowrap}
-        .sim-pct{width:38px;text-align:right;font-size:10px;color:#555;flex-shrink:0}
+        .sim-pct{width:40px;text-align:right;font-size:10px;color:#555;flex-shrink:0}
         .sim-est{background:#1a1400;border:1px solid #f59e0b22;border-radius:5px;padding:4px 6px}
-        @media(max-width:600px){.two-col{grid-template-columns:1fr}}
       `}</style>
     </div>
   )
 }
 
-function PartRow({ name, color, pct, val, valColor, barLabel, isEmpty }) {
+function PartRow({ name, pct, color, val, valColor }) {
   return (
-    <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
-      <div style={{ width:140, fontSize:12, color, flexShrink:0, lineHeight:1.3 }}>{name}</div>
-      <div style={{ flex:1, height:20, background:'#1a1a1a', borderRadius:4, overflow:'hidden' }}>
-        {isEmpty ? (
-          <div style={{ height:'100%', display:'flex', alignItems:'center', padding:'0 8px', fontSize:11, color:'#2a2a2a' }}>En attente de recoupe</div>
-        ) : (
-          <div style={{ width:`${Math.max(pct,0)}%`, height:'100%', background:color, display:'flex', alignItems:'center', padding:'0 8px', fontSize:11, fontWeight:700, color:'#fff', whiteSpace:'nowrap', minWidth:4 }}>
-            {barLabel || `${pct}%`}
-          </div>
-        )}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+      <div style={{ width: 130, fontSize: 12, color, lineHeight: 1.3 }}>{name}</div>
+      <div style={{ flex: 1, height: 16, background: '#1a1a1a', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ width: `${Math.max(pct, 0)}%`, height: '100%', background: color, borderRadius: 3, minWidth: 4 }} />
       </div>
-      <div style={{ width:50, textAlign:'right', fontSize:12, fontWeight:600, color:valColor, flexShrink:0 }}>{val}</div>
+      <div style={{ width: 100, textAlign: 'right', fontSize: 12, fontWeight: 600, color: valColor }}>{val}</div>
     </div>
   )
 }
