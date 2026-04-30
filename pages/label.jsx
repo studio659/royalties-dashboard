@@ -342,32 +342,6 @@ export default function LabelPage() {
             )}
           </div>
         )}
-                  <span className="pt-bar"/>
-                  <span className="pt-streams">Streams</span>
-                  <span className="pt-rev">Revenus</span>
-                </div>
-                {byTitle.map(({title,eur:e,qty,artist}) => {
-                  const w = byTitle[0]?.eur > 0 ? Math.min(e/byTitle[0].eur*100,100) : 0
-                  const c = COLORS[artist]||'#666'
-                  return (
-                    <div key={title} className="plat-row">
-                      <span className="pt-name">
-                        {title.length>18?title.slice(0,16)+'…':title}
-                        <span className="badge">{artist}</span>
-                      </span>
-                      <div className="pt-bar">
-                        <div style={{width:`${w}%`,height:'100%',background:c,borderRadius:2,minWidth:3}}/>
-                      </div>
-                      <span className="pt-streams">{fmtStreams(qty)}</span>
-                      <span className="pt-rev" style={{color:c}}>{fmtEur(e)}</span>
-                    </div>
-                  )
-                })}
-              </>
-            )}
-          </div>
-        )}
-
         {tab==='Plateformes' && (
           <div>
             {detailLoading ? (
